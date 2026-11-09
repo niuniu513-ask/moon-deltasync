@@ -73,7 +73,7 @@ pub struct ChunkManifest {
 }
 ```
 
-'错误统一用 `pub suberror FormatError`（构造子：`BadMagic` / `UnsupportedVersion` / `Truncated` / `BadField` / `TooLarge` / `BlockMismatch` / `UnsupportedOp`），**不允许 panic 出现在公开 API 上**：损坏的输入必须变成诊断信息。
+错误统一用 `pub suberror FormatError`（构造子：`BadMagic` / `UnsupportedVersion` / `Truncated` / `BadField` / `TooLarge` / `BlockMismatch` / `UnsupportedOp`），**不允许 panic 出现在公开 API 上**：损坏的输入必须变成诊断信息。
 
 ### 4.1 块大小与规模上界（实现即契约）
 
@@ -170,7 +170,7 @@ for byte in stream:
 ```
 
 - 默认 `min=2048, avg=8192, max=32768`，`mask` 取 `avg` 的二进制位数减一的全 1 掩码。
-'- `gear_table[i] = XXH64(单字节 i)`（seed=0），由代码推导而非抄表，读者可自行复现。
+- `gear_table[i] = XXH64(单字节 i)`（seed=0），由代码推导而非抄表，读者可自行复现。
 - `mask = (1 << mask_bits) - 1`，默认 `mask_bits = 13`。
 - 边界只依赖尾部窗口，插入/删除前缀不改变后续边界（测试断言）。
 
@@ -197,7 +197,7 @@ moon-deltasync verify  <file> <sha256-hex>         # 全流校验
 
 ### 8.1 CLI 的 JSON 契约（外部校验脚本按此解析）
 
-'每条命令向 stdout 打印一行 JSON；**所列字段必须存在且顺序固定，允许实现追加额外字段**（外部脚本按名字取值即可）。未知命令、未知参数、参数数量不符、非法十六进制摘要，一律打印 `{"kind":"error","code":"...","message":"..."}` 并以非零退出码结束；`verify` 遇到「摘要不匹配」属于正常结论（`ok:false`，退出码 0），不属于错误。
+每条命令向 stdout 打印一行 JSON；**所列字段必须存在且顺序固定，允许实现追加额外字段**（外部脚本按名字取值即可）。未知命令、未知参数、参数数量不符、非法十六进制摘要，一律打印 `{"kind":"error","code":"...","message":"..."}` 并以非零退出码结束；`verify` 遇到「摘要不匹配」属于正常结论（`ok:false`，退出码 0），不属于错误。
 
 `sign` 与 `chunk` 支持 `--out`，分别导出 `DSIG` 与 `DCHK` 的原始字节；`delta` 与 `apply` 的 `--out` 分别导出 `DDLT` 与重建结果。
 
