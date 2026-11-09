@@ -279,6 +279,7 @@ class CliResult:
     elapsed: float
     json: dict | None = None
     timed_out: bool = False
+    json_key_order: list[str] | None = None
 
     @property
     def json_kind(self) -> str | None:
@@ -299,6 +300,43 @@ class CliResult:
         if self.stderr.strip():
             parts.append("stderr=" + repr(self.stderr.strip()[-limit:]))
         return " ".join(parts)
+
+
+def extract_json_order(text: str) -> list[str] | None:
+    """取最后一行 JSON 的键顺序（用于 §8.1「字段顺序固定」的 advisory 检查）。"""
+    for line in reversed(text.strip().splitlines()):
+        line = line.strip()
+        if not (line.startswith("{") and line.endswith("}")):
+            continue
+        try:
+            pairs = json.loads(line, object_pairs_hook=list)
+        except Exception:
+            continue
+        if isinstance(pairs, list) and pairs and all(isinstance(p, tuple) and len(p) == 2 for p in pairs):
+            return [k for k, _ in pairs]
+    return None
+
+
+_ORDER_REPORTED: set[tuple[str, ...]] = set()
+
+
+def check_field_order(rec: Recorder, cat: str, ctx: str, res: CliResult, expected: tuple[str, ...]) -> None:
+    if expected in _ORDER_REPORTED:
+        return
+    _ORDER_REPORTED.add(expected)
+    order = res.json_key_order
+    if not order:
+        rec.info(cat, f"{ctx}: JSON 字段顺序（无解析结果）", res.brief(120))
+        return
+    present = [(f, order.index(f)) for f in expected if f in order]
+    ok = all(present[i][1] < present[i + 1][1] for i in range(len(present) - 1))
+    rec.check(
+        cat,
+        f"{ctx}: §8.1 所列字段的输出顺序与文档一致（advisory，歧义 A16）",
+        ok,
+        f"实际顺序={order}",
+        "advisory",
+    )
 
 
 def extract_json(text: str) -> dict | None:
@@ -372,7 +410,7 @@ class CliRunner:
         elapsed = time.time() - t0
         out = raw_out.decode("utf-8", "replace") if isinstance(raw_out, bytes) else str(raw_out)
         err = raw_err.decode("utf-8", "replace") if isinstance(raw_err, bytes) else str(raw_err)
-        res = CliResult(argv, rc, out, err, elapsed, extract_json(out), timed_out)
+        res = CliResult(argv, rc, out, err, elapsed, extract_json(out), timed_out, extract_json_order(out))
         self.calls.append(res)
         return res
 
@@ -910,6 +948,11 @@ def cli_sign(rec: Recorder, runner: CliRunner, case: Case, tmp: Path) -> R.FileS
         ("path", "total_length", "block_size", "strong_len", "block_count", "signature_bytes",
          "signature_sha256_hex", "sha256_hex", "xxh64_hex"),
     )
+    check_field_order(
+        rec, cat, ctx, res,
+        ("kind", "path", "total_length", "block_size", "strong_len", "block_count",
+         "signature_bytes", "signature_sha256_hex", "sha256_hex", "xxh64_hex"),
+    )
     total_length = int_field(js, "total_length") or 0
     block_size = int_field(js, "block_size")
     strong_len = int_field(js, "strong_len")
@@ -1110,6 +1153,11 @@ def cli_delta(rec: Recorder, runner: CliRunner, case: Case, tmp: Path, sig: R.Fi
         ("old", "new", "new_length", "op_count", "copy_ops", "copy_blocks", "copied_bytes",
          "literal_bytes", "delta_bytes", "delta_sha256_hex", "savings_ratio"),
     )
+    check_field_order(
+        rec, cat, ctx, res,
+        ("kind", "old", "new", "new_length", "op_count", "copy_ops", "copy_blocks",
+         "copied_bytes", "literal_bytes", "delta_bytes", "delta_sha256_hex", "savings_ratio"),
+    )
     extra = [k for k in js if k not in ("kind", "old", "new", "new_length", "op_count", "copy_ops", "copy_blocks", "copied_bytes", "literal_bytes", "delta_bytes", "delta_sha256_hex", "savings_ratio")]
     if extra:
         rec.info(
@@ -1303,6 +1351,10 @@ def cli_apply(rec: Recorder, runner: CliRunner, case: Case, tmp: Path, delta: R.
         blocks_verified is not None and blocks_verified == copy_blocks,
         f"json={blocks_verified} copy_blocks={copy_blocks}",
     )
+    check_field_order(
+        rec, cat, ctx, res,
+        ("kind", "ok", "bytes_written", "blocks_verified", "ops_applied", "sha256_hex"),
+    )
     ops_applied = int_field(js, "ops_applied")
     rec.check(
         cat,
@@ -1364,6 +1416,11 @@ def cli_chunk(rec: Recorder, runner: CliRunner, case: Case, tmp: Path) -> None:
         js,
         ("path", "length", "chunk_count", "unique_chunks", "new_chunks", "reused_chunks",
          "stored_bytes", "saved_bytes", "dedup_ratio", "manifest_bytes", "root_hex"),
+    )
+    check_field_order(
+        rec, cat, ctx, res,
+        ("kind", "path", "length", "chunk_count", "unique_chunks", "new_chunks",
+         "reused_chunks", "stored_bytes", "saved_bytes", "dedup_ratio", "manifest_bytes", "root_hex"),
     )
     if length is not None:
         rec.check(cat, f"{ctx}: chunk length == 文件长度", length == len(case.new), f"{length} vs {len(case.new)}")
@@ -1517,6 +1574,7 @@ def cli_verify(rec: Recorder, runner: CliRunner, case: Case, tmp: Path) -> None:
         mismatch_ok,
         res.brief(),
     )
+    check_field_order(rec, cat, ctx, res, ("kind", "ok", "sha256_hex"))
 
 
 def malformed_suite(rec: Recorder, runner: CliRunner, case: Case, tmp: Path, ddlt_path: Path) -> None:
@@ -1989,54 +2047,65 @@ def write_report(
 
 
 def add_ambiguities(rec: Recorder) -> None:
+    # ---- 已随契约修订闭环（保留记录便于审阅） ----
     rec.note(
-        "A1 §6.3 滑窗对象：原文「在旧数据长度上滑动窗口」与 §7.1「apply(old,delta)==new」矛盾"
-        "（在旧数据上滑窗无法产出覆盖 new 的 op 序列）。本校验器按经典 rsync 语义在**新数据**上滑窗并"
-        "反查旧块签名表；若实现真在旧数据上滑窗，§7.1 的重建一致性断言会直接失败。"
+        "A1 [已闭环] §6.3 原写「在旧数据长度上滑动窗口」；文档已改为「在新数据上滑窗」。"
+        "本校验器的规划器与该语义一致，全部语料的 delta 字节数与实现逐字节相等。"
     )
     rec.note(
-        "A2 §7.4 的「翻转 LITERAL 字节」原先在旧版 DDLT（无 content_digest）下不可达；"
-        "契约已更新（§5.2 增加 content_digest = 目标数据 SHA-256，apply 完成后比对，不符即 DigestMismatch），"
-        "因此该场景现在可检出。本校验器据此把 LITERAL 翻转、content_digest 篡改都升级为硬断言。"
+        "A3 [已闭环] §6.4 原未给定 gear 表；文档已规定 gear_table[i] = XXH64(单字节 i)、mask_bits=13，"
+        "因此本校验器现在能**逐块复现**分块边界（cli-chunk 对块数/块长/块摘要做硬断言）。"
     )
     rec.note(
-        "A3 §6.4 gear 表未给定：内容定义分块的切分边界无法被第三方独立复现；"
-        "本校验器只校验结构性质（块长上下界、总长守恒、root 由块摘要确定性导出、前缀插入复用率），"
-        "不比较具体边界。"
+        "A7 [已闭环] blocks_verified 原语义不明；§8.1 示例 127 == copy_blocks 127，"
+        "故现在硬断言 blocks_verified == COPY/COPY_RUN 展开块数（纯 LITERAL delta 时为 0）。"
     )
     rec.note(
-        "A4 §8.1 的 manifest_bytes=16416 = 512*32+32（只含块摘要+root），而按 §5.3 全量应为 "
-        "41+36*512=18473（含每块 length 字段与头），即 manifest_bytes 的统计口径未定义；"
-        "sign 的 signature_bytes 已改为 2582，与 §5.1 的 22+128*(4+16) 一致。"
-        "本校验器对 manifest_bytes 只做 advisory（接受两种口径），对 signature_bytes 硬断言。"
+        "A8/A12 [已闭环] §8 与 §8.1 已为 sign/chunk 补上 --out（导出 DSIG/DCHK），"
+        "本校验器据此解析真实签名与 manifest 字节。"
     )
     rec.note(
-        "A5 xxh64_hex 未规定字节序：本校验器同时接受大端整数字符串与小端字节序两种写法。"
+        "A13 [已闭环] §6.1 已改为标准 Adler-32（a=1+Σw, b=n+Σ(n-i)w_i，滑动 b'=b-n*out+a'-1）；"
+        "本校验器的弱校验与 zlib.adler32 逐位一致，并逐块核对 DSIG 里的 weak。"
     )
     rec.note(
-        "A6 小数精度：savings_ratio 明确 4 位小数，dedup_ratio 示例为 3 位（0.996）。"
-        "本校验器对 dedup_ratio 用 ±1e-3 容差。"
+        "A14 [已闭环] §5.3 已补 min_size/max_size/mask_bits 头与 varint 块长；本解析器按新布局严格解析、"
+        "重算 root，并拒绝 min>max、mask_bits>=64、root 不符、尾随多余字节。"
+    )
+    # ---- 仍存在的口径问题 ----
+    rec.note(
+        "A2 [仍存在] §7.4 的「翻转 LITERAL 字节」依赖 §5.2 的 content_digest 兜底才能检出；"
+        "若调用方只给 apply(old, delta) 而 delta 的 content_digest 被清零/手写，该类损坏不可发现。"
+        "本校验器按契约把该场景作为硬断言（实测 CLI 返回 digest 不匹配错误）。"
     )
     rec.note(
-        "A7 apply 的 blocks_verified 语义未定义：示例 127 与 delta 的 copy_blocks 一致（而非新文件总块数）。"
-        "本校验器接受 COPY 块数或新文件块数两种解释（advisory）。"
+        "A4 [仍存在] §8.1 的 chunk 示例 manifest_bytes=18473 与 §5.3 新布局的实测大小不符"
+        "（新布局 = 18 + Σ(32+varint) + 32；512 块约 17.5 KB）。建议按新布局重算示例。"
+        "本校验器断言 manifest_bytes == DCHK 实际字节数。"
     )
     rec.note(
-        "A8 §8 只说明 --out 用于导出 DSIG/DDLT，未提 DCHK；但 chunk 报告 manifest_bytes/root_hex，"
-        "第三方无法取得 manifest 原始字节做独立解析。本校验器在 chunk --out 可用时做完整 DCHK 校验，否则记为阻塞。"
+        "A5 [仍存在] xxh64_hex 的字节序未规定；实测实现为大端规范写法（如 7927a0715f2c175c = XXH64 数值的 16 位十六进制），"
+        "建议文档写明，避免第三方按小端输出。本校验器两种写法都接受。"
     )
     rec.note(
-        "A9 默认参数：§4.1 已规定 default_block_size(length) = (length<4096 ? 512 : 8192)，本校验器据此硬断言；"
-        "但 strong_len 默认值只能从 §8.1 示例推为 16（advisory）。CLI 无 block_size/strong_len 选项，"
-        "§4.1 的 [256, 1 MiB] 允许范围只能通过畸形 DDLT 侧测。"
+        "A6 [仍存在] §8.1 只对 savings_ratio 规定 4 位小数；dedup_ratio 示例是 0.0039（4 位）但未明文规定。"
+        "本校验器用 ±1e-3 容差比较 dedup_ratio == saved_bytes/length。"
     )
     rec.note(
-        "A10 §5.2 未规定 COPY 引用旧数据末块（不满 block_size）时的长度语义，也未说明 COPY_RUN 的"
-        "「count 块拼接」是否包含该短末块。本校验器按「旧块实际切片」重放，并假定拼接包含短末块。"
+        "A16 [新] §8.1 写「字段顺序固定」，但 JSON 对象语义无序，实现若用 Map 序列化则顺序不可控；"
+        "建议改为「字段名固定、允许追加额外字段、不保证顺序」。本校验器只做 advisory 顺序检查。"
     )
     rec.note(
-        "A11 §5.3 的 DCHK 不含 chunk_size_hint 字段，而 §4 的 ChunkManifest 有该字段（序列化时被丢弃）；"
-        "gear 表/分块参数也无法从 manifest 反推，跨实现校验 manifest 时只有 root 可比。"
+        "A17 [新] §4 的 Delta 结构没有 content_digest 字段，§5.2 的 DDLT 却有；"
+        "§4 的 ChunkManifest 有 chunk_size_hint，§5.3 的 DCHK 存的是 min_size/max_size/mask_bits。"
+        "类型定义与线格式存在漂移，建议同步（不影响线格式正确性）。"
+    )
+    rec.note(
+        "A18 [新] §6.3 仍写「复杂度 O(旧数据长度)」，但滑窗在新数据上进行，应为 O(新数据长度)。文档措辞待改。"
+    )
+    rec.note(
+        "A19 [新] §5.3 规定 varint「最多 10 字节」，但块长字段是 u32 语义（≤ 1 MiB）；"
+        "本校验器接受 ≤10 字节编码但按 u32 使用，若实现写入超长编码不会被拒绝（无安全影响）。"
     )
 
 

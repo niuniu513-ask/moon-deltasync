@@ -167,7 +167,7 @@ b' = b - n * out + a' - 1     // 常数 1 每移动一位就给 b 多贡献 1，
 3. 未命中则累积 LITERAL 字节。
 4. 输出前做规范化（合并同类 op）并校验 op 覆盖的新数据长度 == `new_length`。
 
-复杂度 O(旧数据长度)，命中失败时最多额外 `block_size` 次字节比较。
+复杂度 O(新数据长度)：窗口在新数据上滑过一遍，每次命中后再比较 `block_size` 字节的强校验。
 
 ### 6.4 内容定义分块（gear hash）
 
@@ -207,9 +207,11 @@ moon-deltasync verify  <file> <sha256-hex>         # 全流校验
 
 ### 8.1 CLI 的 JSON 契约（外部校验脚本按此解析）
 
-每条命令向 stdout 打印一行 JSON；**所列字段必须存在且顺序固定，允许实现追加额外字段**（外部脚本按名字取值即可）。未知命令、未知参数、参数数量不符、非法十六进制摘要，一律打印 `{"kind":"error","code":"...","message":"..."}` 并以非零退出码结束；`verify` 遇到「摘要不匹配」属于正常结论（`ok:false`，退出码 0），不属于错误。
+每条命令向 stdout 打印一行 JSON；**所列字段必须存在（按字段名取值），允许实现追加额外字段，不承诺字段顺序**。未知命令、未知参数、参数数量不符、非法十六进制摘要，一律打印 `{"kind":"error","code":"...","message":"..."}` 并以非零退出码结束；`verify` 遇到「摘要不匹配」属于正常结论（`ok:false`，退出码 0），不属于错误。
 
 `sign` 与 `chunk` 支持 `--out`，分别导出 `DSIG` 与 `DCHK` 的原始字节；`delta` 与 `apply` 的 `--out` 分别导出 `DDLT` 与重建结果。
+
+约定：`xxh64_hex` 是大端规范写法（16 个十六进制字符，与 `xxhsum -H64` 输出一致）；`dedup_ratio` 与 `savings_ratio` 都是 4 位小数文本；`manifest_bytes` 是 `DCHK` 的实际字节数（`18 + Σ(32 + varint(块长)) + 32`）。
 
 ```json
 {"kind":"sign","path":"old.bin","total_length":1048576,"block_size":8192,"strong_len":16,
@@ -224,7 +226,7 @@ moon-deltasync verify  <file> <sha256-hex>         # 全流校验
 
 {"kind":"chunk","path":"big.bin","length":4194304,"chunk_count":512,
  "unique_chunks":510,"new_chunks":510,"reused_chunks":2,"stored_bytes":4177920,"saved_bytes":16384,
- "dedup_ratio":0.0039,"manifest_bytes":18473,"root_hex":"…64位…"}
+ "dedup_ratio":0.0039,"manifest_bytes":17458,"root_hex":"…64位…"}
 
 {"kind":"verify","ok":true,"sha256_hex":"…64位…"}
 ```

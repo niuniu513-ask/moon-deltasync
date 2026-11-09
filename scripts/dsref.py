@@ -698,8 +698,8 @@ def plan_delta(
     bs = block_size
     pos = 0
     if n >= bs:
-        a = 0
-        bsum = 0
+        a = 1
+        bsum = bs
         for i in range(bs):
             byte = new[i]
             a += byte
@@ -721,8 +721,8 @@ def plan_delta(
                 ops.append(("copy", matched.index))
                 pos += bs
                 if pos + bs <= n:
-                    a = 0
-                    bsum = 0
+                    a = 1
+                    bsum = bs
                     for i in range(bs):
                         byte = new[pos + i]
                         a += byte
@@ -734,9 +734,8 @@ def plan_delta(
             if pos + bs < n:
                 out_byte = new[pos]
                 in_byte = new[pos + bs]
-                a = a - out_byte + in_byte
-                a %= MOD
-                bsum = (bsum - bs * out_byte + a) % MOD
+                a = (a - out_byte + in_byte) % MOD
+                bsum = (bsum - bs * out_byte + a - 1) % MOD
             pos += 1
 
     # 尾部不足一个窗口：允许匹配旧数据最后一个不完整块（长度相等时）。
@@ -991,33 +990,3 @@ def build_manifest(
     refs = [ChunkRef(sha256(c), len(c)) for c in chunks]
     return Manifest(min_size, max_size, mask_bits, refs, manifest_root(refs))
 
-
-def cdc_chunks(
-    data: bytes,
-    min_size: int = _MIN_CHUNK,
-    avg_size: int = _AVG_CHUNK,
-    max_size: int = _MAX_CHUNK,
-    table: list[int] | None = None,
-) -> list[bytes]:
-    table = GEAR_TABLE if table is None else table
-    mask_bits = avg_size.bit_length() - 1
-    mask = (1 << mask_bits) - 1
-    chunks = []
-    start = 0
-    h = 0
-    for i, byte in enumerate(data):
-        h = ((h << 1) + table[byte]) & 0xFFFFFFFFFFFFFFFF
-        length = i + 1 - start
-        if length >= max_size or (length >= min_size and (h & mask) == 0):
-            chunks.append(data[start : i + 1])
-            start = i + 1
-            h = 0
-    if start < len(data):
-        chunks.append(data[start:])
-    return chunks
-
-
-def build_manifest(data: bytes, **kwargs) -> Manifest:
-    chunks = cdc_chunks(data, **kwargs)
-    refs = [ChunkRef(sha256(c), len(c)) for c in chunks]
-    return Manifest(_AVG_CHUNK, refs, manifest_root(refs))
