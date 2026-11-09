@@ -1,0 +1,239 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "niuniu513-ask/moon-deltasync"
+
+// Values
+pub fn apply_delta(BytesView, Delta) -> ApplyResult raise FormatError
+
+pub fn be_u32(UInt32) -> Bytes
+
+pub fn be_u64(UInt64) -> Bytes
+
+pub fn block_count(Int32, Int32) -> Int32
+
+pub fn chunk_boundaries(BytesView, params? : ChunkParams) -> Array[(Int32, Int32)]
+
+pub fn chunk_manifest(BytesView, params? : ChunkParams) -> ChunkManifest
+
+pub fn compute_delta(BytesView, FileSignature) -> Delta raise FormatError
+
+pub fn constant_time_equal(BytesView, BytesView) -> Bool
+
+pub fn decode_delta(BytesView) -> Delta raise FormatError
+
+pub fn decode_manifest(BytesView) -> ChunkManifest raise FormatError
+
+pub fn decode_signature(BytesView) -> FileSignature raise FormatError
+
+pub fn default_block_size(Int32) -> Int32
+
+pub fn hex_decode(String) -> Bytes?
+
+pub fn hex_encode(BytesView) -> String
+
+pub fn ingest_snapshot(ChunkStore, BytesView, params? : ChunkParams) -> SnapshotReport
+
+pub fn json_string(String) -> String
+
+pub fn plan_from_signature(FileSignature, BytesView) -> TransferPlan raise FormatError
+
+pub fn plan_transfer(BytesView, BytesView, block_size? : Int32, strong_len? : Int32) -> TransferPlan raise FormatError
+
+pub fn ppm_text(Int32) -> String
+
+pub fn read_u32(BytesView, Int32) -> UInt32?
+
+pub fn read_u64(BytesView, Int32) -> UInt64?
+
+pub fn read_u8(BytesView, Int32) -> Int32?
+
+pub fn read_varint(BytesView, Int32) -> (UInt64, Int32)?
+
+pub fn render_apply_json(ApplyResult) -> String
+
+pub fn render_chunk_json(SnapshotReport, String) -> String
+
+pub fn render_delta_json(TransferPlan, String, String) -> String
+
+pub fn render_error_json(String, String) -> String
+
+pub fn render_plan_markdown(TransferPlan) -> String
+
+pub fn render_plan_text(TransferPlan) -> String
+
+pub fn render_signature_json(FileSignature, String) -> String
+
+pub fn sha256(BytesView) -> Bytes
+
+pub fn sha256_hex(BytesView) -> String
+
+pub fn sha256_prefix(BytesView, Int32) -> Bytes
+
+pub fn sign_bytes(BytesView, block_size? : Int32, strong_len? : Int32) -> FileSignature raise FormatError
+
+pub fn signature_matches(FileSignature, BytesView) -> Bool
+
+pub fn sub_view(BytesView, Int32, Int32) -> BytesView?
+
+pub fn verified_update(BytesView, BytesView) -> ApplyResult raise FormatError
+
+pub fn weak_checksum(BytesView) -> UInt32
+
+pub fn xxh64(BytesView) -> UInt64
+
+pub fn xxh64_hex(BytesView) -> String
+
+// Errors
+pub suberror FormatError {
+  BadMagic(String)
+  UnsupportedVersion(Int32)
+  Truncated(Int32)
+  BadField(String)
+  TooLarge(String)
+  BlockMismatch(Int32)
+  UnsupportedOp(Int32)
+  DigestMismatch
+}
+pub fn FormatError::message(Self) -> String
+
+// Types and methods
+pub struct ApplyResult {
+  bytes_written : Int32
+  blocks_verified : Int32
+  ops_applied : Int32
+  digest_hex : String
+  output : Bytes
+}
+
+pub struct BlockSignature {
+  index : Int32
+  weak : UInt32
+  strong : Bytes
+}
+
+pub struct ByteSink {
+  bytes : Array[Byte]
+}
+pub fn ByteSink::length(Self) -> Int32
+pub fn ByteSink::new() -> Self
+pub fn ByteSink::to_bytes(Self) -> Bytes
+pub fn ByteSink::write_bytes(Self, BytesView) -> Unit
+pub fn ByteSink::write_u32(Self, UInt32) -> Unit
+pub fn ByteSink::write_u64(Self, UInt64) -> Unit
+pub fn ByteSink::write_u8(Self, Int32) -> Unit
+pub fn ByteSink::write_varint(Self, UInt64) -> Unit
+
+pub struct ChunkManifest {
+  params : ChunkParams
+  chunks : Array[ChunkRef]
+  root : Bytes
+}
+pub fn ChunkManifest::chunk_count(Self) -> Int32
+pub fn ChunkManifest::encode(Self) -> Bytes
+pub fn ChunkManifest::root_hex(Self) -> String
+pub fn ChunkManifest::total_length(Self) -> Int32
+pub fn ChunkManifest::unique_chunks(Self) -> Int32
+pub fn ChunkManifest::verify(Self, BytesView) -> Bool
+
+pub struct ChunkParams {
+  min_size : Int32
+  max_size : Int32
+  mask_bits : Int32
+}
+pub fn ChunkParams::default() -> Self
+pub fn ChunkParams::new(min_size? : Int32, max_size? : Int32, mask_bits? : Int32) -> Self raise FormatError
+
+pub struct ChunkRef {
+  digest : Bytes
+  length : Int32
+}
+
+pub struct ChunkStore {
+  chunks : Map[String, Bytes]
+  references : Map[String, Int32]
+  mut total_bytes : Int32
+  mut unique_bytes : Int32
+}
+pub fn ChunkStore::assemble(Self, ChunkManifest) -> Bytes raise FormatError
+pub fn ChunkStore::ingest(Self, BytesView, params? : ChunkParams) -> IngestReport
+pub fn ChunkStore::new() -> Self
+pub fn ChunkStore::saved_bytes(Self) -> Int32
+pub fn ChunkStore::stored_bytes(Self) -> Int32
+pub fn ChunkStore::unique_chunks(Self) -> Int32
+
+pub struct Delta {
+  block_size : Int32
+  strong_len : Int32
+  new_length : Int32
+  content_digest : Bytes
+  ops : Array[DeltaOp]
+}
+pub fn Delta::copied_bytes(Self) -> Int32
+pub fn Delta::copy_ops(Self) -> Int32
+pub fn Delta::digest_hex(Self) -> String
+pub fn Delta::encode(Self) -> Bytes
+pub fn Delta::literal_bytes(Self) -> Int32
+
+pub enum DeltaOp {
+  Copy(Int32, Bytes)
+  CopyRun(Int32, Int32, Bytes)
+  Literal(Bytes)
+}
+
+pub struct FileSignature {
+  block_size : Int32
+  strong_len : Int32
+  total_length : Int32
+  blocks : Array[BlockSignature]
+}
+pub fn FileSignature::block_count(Self) -> Int32
+pub fn FileSignature::block_length(Self, Int32) -> Int32?
+pub fn FileSignature::digest_hex(Self) -> String
+pub fn FileSignature::encode(Self) -> Bytes
+
+pub struct IngestReport {
+  total_bytes : Int32
+  chunk_count : Int32
+  new_chunks : Int32
+  reused_chunks : Int32
+  unique_bytes : Int32
+  manifest : ChunkManifest
+}
+
+pub struct SnapshotReport {
+  total_bytes : Int32
+  chunk_count : Int32
+  new_chunks : Int32
+  reused_chunks : Int32
+  stored_bytes : Int32
+  saved_bytes : Int32
+  root_hex : String
+}
+
+pub struct TransferPlan {
+  signature : FileSignature
+  delta : Delta
+  new_length : Int32
+  delta_bytes : Int32
+}
+pub fn TransferPlan::copied_bytes(Self) -> Int32
+pub fn TransferPlan::copy_ops(Self) -> Int32
+pub fn TransferPlan::delta(Self) -> Delta
+pub fn TransferPlan::delta_bytes(Self) -> Bytes
+pub fn TransferPlan::literal_bytes(Self) -> Int32
+pub fn TransferPlan::new_length(Self) -> Int32
+pub fn TransferPlan::savings_ppm(Self) -> Int32
+pub fn TransferPlan::signature(Self) -> FileSignature
+
+pub struct WeakRoll {
+  mut a : UInt32
+  mut b : UInt32
+  window : UInt32
+}
+pub fn WeakRoll::new(BytesView) -> Self
+pub fn WeakRoll::reset(Self, BytesView) -> Unit
+pub fn WeakRoll::roll(Self, Byte, Byte) -> Unit
+pub fn WeakRoll::value(Self) -> UInt32
+
+// Type aliases
+
+// Traits

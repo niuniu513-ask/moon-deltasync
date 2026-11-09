@@ -1,0 +1,135 @@
+moon-deltasync 独立第三方校验报告
+==============================================================================
+生成时间         : 2026-11-09 22:22:52
+总耗时           : 1.7s
+运行模式         : selftest
+校验器           : scripts/verify_deltasync.py + scripts/dsref.py（纯标准库，独立实现）
+被测项目         : D:\moonbit\moon-deltasync
+契约             : D:\moonbit\moon-deltasync\docs\design.md（§5 格式 / §6 算法 / §8 CLI JSON）
+python           : 3.14.6 (3.14.6)
+platform         : Windows-11-10.0.26300-SP0
+cwd              : D:\moonbit\moon-deltasync\scripts
+moon             : moon 0.1.20261023 (3778465 2026-10-23)
+node             : v25.2.1
+
+复现命令
+------------------------------------------------------------------------------
+  D:\anaconda3\python.exe verify_deltasync.py --mode selftest
+  （在 scripts/ 目录下运行；或从仓库根目录运行 python scripts/verify_deltasync.py）
+  单条联调命令模板: D:\moonbit\_tools\moon-0.10.17\bin\moon.exe run --target js cmd/main -- sign <old> --out <old.dsig>
+
+结论
+------------------------------------------------------------------------------
+  硬断言 : 51/51 通过，0 失败
+  建议项 : 0/0 通过（advisory，不计入失败；反映文档歧义下的实现选择）
+  阻塞项 : 0
+  退出码 : 0  (0=全通过 / 1=硬断言失败 / 2=自测通过但 CLI 联调被阻塞)
+  CLI 探测: 不可用 -> (skipped)
+
+断言分类统计
+------------------------------------------------------------------------------
+  category                          hard    advisory
+  selftest-hash                      4/4         0/0
+  selftest-weak                      2/2         0/0
+  selftest-format                  30/30         0/0
+  selftest-replay                    9/9         0/0
+  selftest-planner                   5/5         0/0
+  selftest-cdc                       1/1         0/0
+
+语料（固定种子 PRNG 20261109，写入临时目录，不提交）
+------------------------------------------------------------------------------
+  case                         old       new  编辑类型
+  doc-64k-insert             65536     67584  在 1/3 处插入 2048B
+  doc-256k-mixed            262144    264144  替换 4096B + 删除 3000B + 插入 5000B
+  doc-1m-move              1048576   1048576  搬移 60000B 段到 700000 处
+  doc-2m-mixed             2097152   2087152  插入 30000B + 删除 40000B + 替换 16384B + 搬移 100000B
+  doc-64k-identical          65536     65536  无改动
+  doc-64k-allnew             65536     65536  全部重写
+  doc-256k-1pct-blocks      262144    262144  覆盖 1/32 个块
+  tiny-empty                     0         0  空 -> 空
+  tiny-1                         1         1  1B -> 1B
+  tiny-100                     100       120  100B 内替换 20B
+
+全部断言明细
+------------------------------------------------------------------------------
+## selftest-hash
+  [PASS] XXH64 seed=0 测试向量 len=0  -- got 0xef46db3751d8e999, expect 0xef46db3751d8e999
+  [PASS] XXH64 seed=0 测试向量 len=3  -- got 0x44bc2cf5ad770999, expect 0x44bc2cf5ad770999
+  [PASS] XXH64 seed=0 测试向量 len=39  -- got 0xfbcea83c8a378bf1, expect 0xfbcea83c8a378bf1
+  [PASS] XXH64 空输入 != 非空输入（基本灵敏度）  -- 空输入与非空输入区分
+
+## selftest-weak
+  [PASS] 弱校验 = (b<<16)|a 按 §6.1 公式（120 个随机窗口）
+  [PASS] 滑动更新 a'=a-out+in, b'=b-n*out+a' 与直接计算一致（15504 次滑窗）
+
+## selftest-format
+  [PASS] DSIG 序列化 -> 解析 -> 再序列化 逐字节相同  -- 242 bytes, 11 blocks
+  [PASS] DSIG 块划分 = ceil(total_length/block_size)，末块为不满块且 weak/strong 正确  -- block_count=11 expect=11 last_len=760
+  [PASS] DSIG 拒绝畸形输入：截断 4 字节  -- DSIG payload size 216 != block_count*(4+strong_len) = 220
+  [PASS] DSIG 拒绝畸形输入：空字节流  -- truncated: need 4 byte(s) at offset 0, only 0 available (total 0)
+  [PASS] DSIG 拒绝畸形输入：错 magic DDLT  -- bad magic b'DDLT', expected b'DSIG'
+  [PASS] DSIG 拒绝畸形输入：版本 2  -- unsupported DSIG version 2
+  [PASS] DSIG 拒绝畸形输入：strong_len=12  -- strong_len must be 8 or 16, got 12
+  [PASS] DSIG 拒绝畸形输入：block_count 改大  -- block_count 12 != ceil(total_length/block_size) = 11
+  [PASS] DSIG 拒绝畸形输入：block_count=0xFFFFFFFF  -- block_count 4294967295 != ceil(total_length/block_size) = 11
+  [PASS] DSIG 拒绝畸形输入：block_size=0  -- block_size must be positive, got 0
+  [PASS] DSIG 拒绝畸形输入：尾部多 1 字节  -- DSIG payload size 221 != block_count*(4+strong_len) = 220
+  [PASS] DDLT 序列化 -> 解析 -> 再序列化 逐字节相同  -- 8276 bytes, 2 ops
+  [PASS] DDLT 的 COPY/COPY_RUN 均携带 strong_len 字节强校验（§5.2）  -- ops=[('lit', None), ('copy_run', 16)]
+  [PASS] COPY_RUN 强校验 == sha256(旧块拼接)[0:strong_len]（§5.2 语义）  -- 逐 op 复核
+  [PASS] 规范化后重放覆盖长度 == new_length  -- copy_blocks=4 literal=8192 new_length=40000
+  [PASS] DDLT 拒绝畸形输入：截断 1 字节  -- truncated: need 16 byte(s) at offset 8260, only 15 available (total 8275)
+  [PASS] DDLT 拒绝畸形输入：空字节流  -- truncated: need 4 byte(s) at offset 0, only 0 available (total 0)
+  [PASS] DDLT 拒绝畸形输入：错 magic DSIG  -- bad magic b'DSIG', expected b'DDLT'
+  [PASS] DDLT 拒绝畸形输入：版本 9  -- unsupported DDLT version 9
+  [PASS] DDLT 拒绝畸形输入：strong_len=7  -- strong_len must be 8 or 16, got 7
+  [PASS] DDLT 拒绝畸形输入：op_count=0xFFFFFFFF  -- op_count 4294967295 exceeds remaining payload 8222 byte(s)
+  [PASS] DDLT 拒绝畸形输入：op tag=7  -- unknown op tag 7 at op index 0
+  [PASS] DDLT 拒绝畸形输入：LITERAL 长度 0xFFFFFFFF  -- LITERAL length 4294967295 exceeds remaining payload 0 byte(s)
+  [PASS] DDLT 拒绝畸形输入：尾部多 2 字节  -- DDLT has 2 trailing byte(s) after 2 op(s)
+  [PASS] DCHK 序列化 -> 解析 -> root 重算一致 + 长度守恒  -- 6 chunks, 257 bytes
+  [PASS] DCHK 拒绝畸形输入：截断 1 字节  -- DCHK payload 247 byte(s) != chunk_count*36+32 = 248
+  [PASS] DCHK 拒绝畸形输入：空字节流  -- truncated: need 4 byte(s) at offset 0, only 0 available (total 0)
+  [PASS] DCHK 拒绝畸形输入：错 magic  -- bad magic b'DCHX', expected b'DCHK'
+  [PASS] DCHK 拒绝畸形输入：chunk_count+1  -- DCHK payload 248 byte(s) != chunk_count*36+32 = 284
+  [PASS] DCHK 拒绝畸形输入：chunk_count=0xFFFFFFFF  -- DCHK payload 248 byte(s) != chunk_count*36+32 = 154618822652
+
+## selftest-replay
+  [PASS] 重放(旧+delta) 与 new 逐字节相同（合成数据）  -- 40000 bytes
+  [PASS] DDLT content_digest == sha256(目标数据)（§5.2）  -- 6cc181ed81a28396f0d146b2acde8be187dffa8239dd1b3d358811ac7d139874 vs 6cc181ed81a28396f0d146b2acde8be187dffa8239dd1b3d358811ac7d139874
+  [PASS] 篡改 delta 内强校验 -> BlockMismatch（§7.4）  -- code=block-mismatch block=1: op[1] COPY_RUN(start=1, count=4) strong mismatch: recomputed 893dcd74e0941b6882cff4f85029b8fe, delta records 00000000000
+  [PASS] COPY 指向内容不同的块 -> BlockMismatch（§7.4）  -- code=block-mismatch block=1: op[0] COPY_RUN(start=1, count=1) strong mismatch: recomputed 4bee2326988674c16efd3992090b2c28, delta records c4aa220b61d
+  [PASS] delta 与签名摘要不一致 -> sig-mismatch  -- code=sig-mismatch
+  [PASS] 翻转 LITERAL 字节 -> digest-mismatch（§5.2 content_digest 兜底）  -- code=digest-mismatch: 重建结果 SHA-256 baf25cf12d8354a872d257fd3689afcba6edf2e22d6c022c4a074460cc619f0b != DDLT content_digest 6cc181ed81a28396f0d
+  [PASS] COPY 块号越界 -> block-index 错误  -- code=block-index: op[0] COPY block index 4294967295 out of range (old has 5 block(s) of size 8192)
+  [PASS] 重放长度 != new_length -> length 错误  -- code=length: replayed 3 byte(s) but DDLT new_length is 123456
+  [PASS] content_digest 不符 -> digest-mismatch  -- code=digest-mismatch
+
+## selftest-planner
+  [PASS] 相同数据 -> 单个 COPY_RUN，delta 字节数 == 头+COPY_RUN  -- ops=[('copy_run', 0, 5)] delta_bytes=79 expect=79
+  [PASS] 完全不同数据 -> 纯 LITERAL，delta 字节数 == 头+LITERAL 包装  -- delta_bytes=40059 expect=40059 new_len=40000
+  [PASS] 规划器输出满足 §5.2 规范化（无相邻同类 op）  -- violations=[]
+  [PASS] 插入 5000B 的 256 KiB 文档：delta 只承载改动区（literal < 4×5000+1KiB）  -- delta_bytes=13301, literal=13192
+  [PASS] 规划器 -> 序列化 -> 解析 -> 重放 == new（256 KiB 插入场景）  -- 267144 bytes
+
+## selftest-cdc
+  [PASS] 参考 CDC 分块可无损拼接 + 块长在 [min, max]（末块除外）  -- 174 chunks, avg=6026B
+  [INFO] 参考 CDC 前缀插入 1 字节的指纹复用（仅参考，不与被测实现比较）  -- reference reuse 173/174
+
+设计文档歧义（本校验器实际采用的解释）
+------------------------------------------------------------------------------
+  * A1 §6.3 滑窗对象：原文「在旧数据长度上滑动窗口」与 §7.1「apply(old,delta)==new」矛盾（在旧数据上滑窗无法产出覆盖 new 的 op 序列）。本校验器按经典 rsync 语义在**新数据**上滑窗并反查旧块签名表；若实现真在旧数据上滑窗，§7.1 的重建一致性断言会直接失败。
+  * A2 §7.4 的「翻转 LITERAL 字节」原先在旧版 DDLT（无 content_digest）下不可达；契约已更新（§5.2 增加 content_digest = 目标数据 SHA-256，apply 完成后比对，不符即 DigestMismatch），因此该场景现在可检出。本校验器据此把 LITERAL 翻转、content_digest 篡改都升级为硬断言。
+  * A3 §6.4 gear 表未给定：内容定义分块的切分边界无法被第三方独立复现；本校验器只校验结构性质（块长上下界、总长守恒、root 由块摘要确定性导出、前缀插入复用率），不比较具体边界。
+  * A4 §8.1 的 manifest_bytes=16416 = 512*32+32（只含块摘要+root），而按 §5.3 全量应为 41+36*512=18473（含每块 length 字段与头），即 manifest_bytes 的统计口径未定义；sign 的 signature_bytes 已改为 2582，与 §5.1 的 22+128*(4+16) 一致。本校验器对 manifest_bytes 只做 advisory（接受两种口径），对 signature_bytes 硬断言。
+  * A5 xxh64_hex 未规定字节序：本校验器同时接受大端整数字符串与小端字节序两种写法。
+  * A6 小数精度：savings_ratio 明确 4 位小数，dedup_ratio 示例为 3 位（0.996）。本校验器对 dedup_ratio 用 ±1e-3 容差。
+  * A7 apply 的 blocks_verified 语义未定义：示例 127 与 delta 的 copy_blocks 一致（而非新文件总块数）。本校验器接受 COPY 块数或新文件块数两种解释（advisory）。
+  * A8 §8 只说明 --out 用于导出 DSIG/DDLT，未提 DCHK；但 chunk 报告 manifest_bytes/root_hex，第三方无法取得 manifest 原始字节做独立解析。本校验器在 chunk --out 可用时做完整 DCHK 校验，否则记为阻塞。
+  * A9 默认参数：§4.1 已规定 default_block_size(length) = (length<4096 ? 512 : 8192)，本校验器据此硬断言；但 strong_len 默认值只能从 §8.1 示例推为 16（advisory）。CLI 无 block_size/strong_len 选项，§4.1 的 [256, 1 MiB] 允许范围只能通过畸形 DDLT 侧测。
+  * A10 §5.2 未规定 COPY 引用旧数据末块（不满 block_size）时的长度语义，也未说明 COPY_RUN 的「count 块拼接」是否包含该短末块。本校验器按「旧块实际切片」重放，并假定拼接包含短末块。
+  * A11 §5.3 的 DCHK 不含 chunk_size_hint 字段，而 §4 的 ChunkManifest 有该字段（序列化时被丢弃）；gear 表/分块参数也无法从 manifest 反推，跨实现校验 manifest 时只有 root 可比。
+
+CLI 调用记录（时间 / 退出码 / 参数）
+------------------------------------------------------------------------------
+  共 0 次调用
