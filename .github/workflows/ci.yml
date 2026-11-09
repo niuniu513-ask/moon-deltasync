@@ -19,6 +19,8 @@ jobs:
           echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
       - name: Toolchain version
         run: moon version --all
+      - name: Refresh the registry index
+        run: moon update
       - name: Check
         run: moon check --deny-warn --target all
       - name: Build
