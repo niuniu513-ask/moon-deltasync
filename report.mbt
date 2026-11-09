@@ -82,6 +82,8 @@ pub fn ppm_text(ppm : Int32) -> String {
 pub fn render_signature_json(
   signature : FileSignature,
   path : String,
+  content_sha256_hex : String,
+  content_xxh64_hex : String,
 ) -> String {
   "{\"kind\":\"sign\",\"path\":" +
   json_string(path) +
@@ -97,6 +99,10 @@ pub fn render_signature_json(
   signature.encode().length().to_string() +
   ",\"signature_sha256_hex\":" +
   json_string(signature.digest_hex()) +
+  ",\"sha256_hex\":" +
+  json_string(content_sha256_hex) +
+  ",\"xxh64_hex\":" +
+  json_string(content_xxh64_hex) +
   "}"
 }
 
@@ -113,8 +119,12 @@ pub fn render_delta_json(
   json_string(new_path) +
   ",\"new_length\":" +
   plan.new_length().to_string() +
+  ",\"op_count\":" +
+  plan.delta().op_count().to_string() +
   ",\"copy_ops\":" +
   plan.copy_ops().to_string() +
+  ",\"copy_blocks\":" +
+  plan.delta().copied_blocks().to_string() +
   ",\"copied_bytes\":" +
   plan.copied_bytes().to_string() +
   ",\"literal_bytes\":" +
@@ -151,6 +161,8 @@ pub fn render_chunk_json(report : SnapshotReport, path : String) -> String {
   report.total_bytes.to_string() +
   ",\"chunk_count\":" +
   report.chunk_count.to_string() +
+  ",\"unique_chunks\":" +
+  report.unique_chunks.to_string() +
   ",\"new_chunks\":" +
   report.new_chunks.to_string() +
   ",\"reused_chunks\":" +
@@ -159,6 +171,10 @@ pub fn render_chunk_json(report : SnapshotReport, path : String) -> String {
   report.stored_bytes.to_string() +
   ",\"saved_bytes\":" +
   report.saved_bytes.to_string() +
+  ",\"dedup_ratio\":" +
+  ppm_text(report.dedup_ppm) +
+  ",\"manifest_bytes\":" +
+  report.manifest_bytes.to_string() +
   ",\"root_hex\":" +
   json_string(report.root_hex) +
   "}"

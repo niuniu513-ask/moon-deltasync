@@ -79,7 +79,7 @@ pub struct ChunkManifest {
 
 - `sign_bytes(input, block_size?, strong_len?)` 的默认块大小由 `default_block_size(length)` 决定：`length < 4096` 用 512 字节，否则 8192 字节。
 - 允许范围：`block_size ∈ [256, 1 MiB]`，`strong_len ∈ {8, 16}`，`block_count ≤ 1_000_000`，`total_length ≤ 2^40`。
-- 越界一律 `TooLarge` / `BadField`，不做截断或静默降级。'
+- 越界一律 `TooLarge` / `BadField`，不做截断或静默降级。
 
 ## 5. 二进制格式
 
@@ -141,7 +141,7 @@ weak = (b << 16) | a
 
 ```
 a' = a - out + in
-b' = b - n * out + a'
+b' = b - n * out + a
 ```
 
 ### 6.2 强校验
@@ -153,7 +153,7 @@ b' = b - n * out + a'
 ### 6.3 delta 生成
 
 1. 用签名里的弱校验建桶：`weak -> [block_index...]`。
-2. 在旧数据长度上滑动窗口（窗口 = `block_size`），命中弱校验后再比强校验；命中则发出 COPY（连续块合并且检查块内容确实连续），窗口跳过 `block_size`。
+2. 在**新数据**上滑动窗口（窗口 = `block_size`），弱校验命中候选后再比强校验；命中则发出 COPY（连续块合并），窗口跳过 `block_size`。
 3. 未命中则累积 LITERAL 字节。
 4. 输出前做规范化（合并同类 op）并校验 op 覆盖的新数据长度 == `new_length`。
 
@@ -170,6 +170,8 @@ for byte in stream:
 ```
 
 - 默认 `min=2048, avg=8192, max=32768`，`mask` 取 `avg` 的二进制位数减一的全 1 掩码。
+'- `gear_table[i] = XXH64(单字节 i)`（seed=0），由代码推导而非抄表，读者可自行复现。
+- `mask = (1 << mask_bits) - 1`，默认 `mask_bits = 13`。
 - 边界只依赖尾部窗口，插入/删除前缀不改变后续边界（测试断言）。
 
 ## 7. 不变量（全部有测试）
@@ -186,30 +188,33 @@ for byte in stream:
 ## 8. 命令行
 
 ```
-moon-deltasync sign    <old>                       # 输出签名摘要与统计
+moon-deltasync sign    <old>   [--out dsig]        # 输出签名摘要与统计，可导出 DSIG
 moon-deltasync delta   <old> <new>   [--out d]     # 计算 delta 并报告节省
 moon-deltasync apply   <old> <delta> [--out f]     # 应用并逐块校验
-moon-deltasync chunk   <file>                      # 分块与去重率报告
+moon-deltasync chunk   <file>  [--out dchk]        # 分块与去重率报告，可导出 DCHK
 moon-deltasync verify  <file> <sha256-hex>         # 全流校验
 ```
 
 ### 8.1 CLI 的 JSON 契约（外部校验脚本按此解析）
 
-每条命令向 stdout 打印一行 JSON，字段固定；未知命令或参数错误时打印 `{"kind":"error","code":"...","message":"..."}` 并以非零退出码结束。
+'每条命令向 stdout 打印一行 JSON；**所列字段必须存在且顺序固定，允许实现追加额外字段**（外部脚本按名字取值即可）。未知命令、未知参数、参数数量不符、非法十六进制摘要，一律打印 `{"kind":"error","code":"...","message":"..."}` 并以非零退出码结束；`verify` 遇到「摘要不匹配」属于正常结论（`ok:false`，退出码 0），不属于错误。
+
+`sign` 与 `chunk` 支持 `--out`，分别导出 `DSIG` 与 `DCHK` 的原始字节；`delta` 与 `apply` 的 `--out` 分别导出 `DDLT` 与重建结果。
 
 ```json
 {"kind":"sign","path":"old.bin","total_length":1048576,"block_size":8192,"strong_len":16,
- "block_count":128,"sha256_hex":"…64位…","xxh64_hex":"…16位…","signature_sha256_hex":"…64位…",
- "signature_bytes":2582}
+ "block_count":128,"signature_bytes":2582,"signature_sha256_hex":"…64位…",
+ "sha256_hex":"…64位…","xxh64_hex":"…16位…"}
 
-{"kind":"delta","old":"old.bin","new":"new.bin","new_length":1048576,"op_count":12,
- "copy_blocks":127,"literal_bytes":8192,"delta_bytes":8260,"delta_sha256_hex":"…64位…",
- "savings_ratio":0.9921}
+{"kind":"delta","old":"old.bin","new":"new.bin","new_length":1048576,
+ "op_count":12,"copy_ops":11,"copy_blocks":127,"copied_bytes":1040384,"literal_bytes":8192,
+ "delta_bytes":8260,"delta_sha256_hex":"…64位…","savings_ratio":0.9921}
 
-{"kind":"apply","ok":true,"bytes_written":1048576,"blocks_verified":127,"sha256_hex":"…64位…"}
+{"kind":"apply","ok":true,"bytes_written":1048576,"blocks_verified":127,"ops_applied":12,"sha256_hex":"…64位…"}
 
-{"kind":"chunk","path":"big.bin","length":4194304,"chunk_count":512,"unique_chunks":510,
- "dedup_ratio":0.996,"root_hex":"…64位…","manifest_bytes":16416}
+{"kind":"chunk","path":"big.bin","length":4194304,"chunk_count":512,
+ "unique_chunks":510,"new_chunks":510,"reused_chunks":2,"stored_bytes":4177920,"saved_bytes":16384,
+ "dedup_ratio":0.0039,"manifest_bytes":18473,"root_hex":"…64位…"}
 
 {"kind":"verify","ok":true,"sha256_hex":"…64位…"}
 ```

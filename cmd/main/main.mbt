@@ -121,14 +121,51 @@ fn usage_text() -> String {
 }
 
 ///|
-fn command_sign(argv : Array[String]) -> String raise CliError {
-  if argv.length() < 2 {
-    raise Failure("usage", "sign needs one path")
+/// Reject an argument list whose shape the command did not expect.
+///
+/// Silently ignoring an unknown flag is how a caller ends up believing a file was
+/// written when it was not, so every unexpected argument is a usage failure.
+fn expect_shape(
+  argv : Array[String],
+  positional : Int,
+  allow_output : Bool,
+) -> Unit raise CliError {
+  let mut index = positional + 1
+  while index < argv.length() {
+    let current = argv[index]
+    if current == "--out" && allow_output {
+      if index + 1 >= argv.length() {
+        raise Failure("usage", "--out needs a path")
+      }
+      index = index + 2
+    } else {
+      raise Failure("usage", "unexpected argument: " + current)
+    }
   }
+  // One token for the command, `positional` for its inputs, plus `--out <path>`.
+  let minimum = positional + 1
+  let maximum = if allow_output { minimum + 2 } else { minimum }
+  if argv.length() < minimum || argv.length() > maximum {
+    raise Failure("usage", usage_text())
+  }
+}
+
+///|
+fn command_sign(argv : Array[String]) -> String raise CliError {
+  expect_shape(argv, 1, true)
   let path = argv[1]
   let bytes = read_bytes(path)
   let signature = recover(() => @ds.sign_bytes(bytes[:]))
-  @ds.render_signature_json(signature, path)
+  match option_value(argv, "--out") {
+    Some(target) => write_bytes(target, signature.encode())
+    None => ()
+  }
+  @ds.render_signature_json(
+    signature,
+    path,
+    @ds.sha256_hex(bytes[:]),
+    @ds.xxh64_hex(bytes[:]),
+  )
 }
 
 ///|
@@ -143,9 +180,7 @@ fn option_value(argv : Array[String], name : String) -> String? {
 
 ///|
 fn command_delta(argv : Array[String]) -> String raise CliError {
-  if argv.length() < 3 {
-    raise Failure("usage", "delta needs <old> <new>")
-  }
+  expect_shape(argv, 2, true)
   let old_path = argv[1]
   let new_path = argv[2]
   let old = read_bytes(old_path)
@@ -160,9 +195,7 @@ fn command_delta(argv : Array[String]) -> String raise CliError {
 
 ///|
 fn command_apply(argv : Array[String]) -> String raise CliError {
-  if argv.length() < 3 {
-    raise Failure("usage", "apply needs <old> <delta>")
-  }
+  expect_shape(argv, 2, true)
   let old_path = argv[1]
   let delta_path = argv[2]
   let old = read_bytes(old_path)
@@ -177,11 +210,14 @@ fn command_apply(argv : Array[String]) -> String raise CliError {
 
 ///|
 fn command_chunk(argv : Array[String]) -> String raise CliError {
-  if argv.length() < 2 {
-    raise Failure("usage", "chunk needs one path")
-  }
+  expect_shape(argv, 1, true)
   let path = argv[1]
   let bytes = read_bytes(path)
+  let manifest = @ds.chunk_manifest(bytes[:])
+  match option_value(argv, "--out") {
+    Some(target) => write_bytes(target, manifest.encode())
+    None => ()
+  }
   let store = @ds.ChunkStore::new()
   let report = @ds.ingest_snapshot(store, bytes[:])
   @ds.render_chunk_json(report, path)
@@ -189,17 +225,28 @@ fn command_chunk(argv : Array[String]) -> String raise CliError {
 
 ///|
 fn command_verify(argv : Array[String]) -> String raise CliError {
-  if argv.length() < 3 {
-    raise Failure("usage", "verify needs <path> <sha256-hex>")
+  if argv.length() != 3 {
+    raise Failure("usage", "verify needs exactly <path> <sha256-hex>")
   }
   let path = argv[1]
   let expected = argv[2]
+  let expected_bytes = match @ds.hex_decode(expected) {
+    Some(bytes) => bytes
+    None => raise Failure("usage", "the expected digest is not hexadecimal")
+  }
+  if expected_bytes.length() != 32 {
+    raise Failure("usage", "the expected digest must be 32 bytes (64 hex digits)")
+  }
   let bytes = read_bytes(path)
-  let actual = @ds.sha256_hex(bytes[:])
-  let ok = actual == expected
+  let actual = @ds.sha256(bytes[:])
+  let ok = @ds.constant_time_equal(actual[:], expected_bytes[:])
   "{\"kind\":\"verify\",\"ok\":" +
-  (if ok { "true" } else { "false" }) +
+  (if ok {
+    "true"
+  } else {
+    "false"
+  }) +
   ",\"sha256_hex\":\"" +
-  actual +
+  @ds.hex_encode(actual[:]) +
   "\"}"
 }

@@ -351,7 +351,13 @@ pub fn ChunkStore::unique_chunks(self : ChunkStore) -> Int32 {
 }
 
 ///|
-/// The sum of the lengths of the distinct chunks.
+/// The sum of the lengths of every version ingested so far.
+pub fn ChunkStore::total_bytes_ingested(self : ChunkStore) -> Int {
+  self.total_bytes
+}
+
+///|
+/// The sum of the lengths of the distinct chunks.'
 pub fn ChunkStore::stored_bytes(self : ChunkStore) -> Int32 {
   self.unique_bytes
 }

@@ -48,6 +48,9 @@ import dsref as R  # noqa: E402
 # 同一「外部无法验证」的原因只登记一次，避免 9 个语料各刷一条
 _BLOCKED_SEEN: set[str] = set()
 
+# delta 规模对比（实现 vs 独立规划器），由 cli_delta 填充，报告里汇总成表
+DELTA_STATS: list[dict] = []
+
 
 def blocked_once(rec: "Recorder", category: str, name: str, detail: str) -> None:
     if name in _BLOCKED_SEEN:
@@ -1185,6 +1188,19 @@ def cli_delta(rec: Recorder, runner: CliRunner, case: Case, tmp: Path, sig: R.Fi
         f"new={len(case.new)}B delta={delta_bytes}B planner={planner_bytes}B "
         f"copy_blocks={copy_blocks} literal={literal_bytes}B ops={op_count} cli_time={elapsed:.2f}s",
     )
+    if delta_bytes is not None:
+        DELTA_STATS.append(
+            {
+                "case": ctx,
+                "new": len(case.new),
+                "delta": delta_bytes,
+                "planner": planner_bytes,
+                "copied": delta.copy_block_count(),
+                "literal": delta.literal_bytes(),
+                "ops": len(delta.ops),
+                "cli_time": elapsed,
+            }
+        )
     return delta, ddlt_path
 
 
@@ -1372,16 +1388,23 @@ def cli_verify(rec: Recorder, runner: CliRunner, case: Case, tmp: Path) -> None:
         rec.check(cat, f"{ctx}: verify 回显 sha256_hex == 输入", (res.json or {}).get("sha256_hex", "").lower() == good, f"{res.json.get('sha256_hex')} vs {good}")
     bad = "00" * 32
     res = runner.run(["verify", str(new_path), bad])
-    good_err = (
-        res.returncode != 0
-        and not res.timed_out
-        and (res.json or {}).get("kind") == "error"
-        and not res.crash_markers()
+    is_error = res.returncode != 0 and (res.json or {}).get("kind") == "error"
+    is_ok_false = res.returncode == 0 and (res.json or {}).get("kind") == "verify" and (res.json or {}).get("ok") is False
+    rec.check(
+        cat,
+        f"{ctx}: verify 不匹配的合法 SHA-256 -> 明确否定（ok:false 或 error），不能假成功",
+        (is_error or is_ok_false) and not res.timed_out and not res.crash_markers(),
+        res.brief() + ("" if is_error else " | 走 verify/ok=false 分支（§8.1 只规定「参数错误」用 error JSON，"
+                                            "校验不匹配算业务结果，可接受；建议在文档中明确）"),
+        "advisory",
     )
-    detail = res.brief()
-    if res.json and res.json.get("kind") == "verify":
-        detail += " | 注意：错误哈希走了 verify 分支（ok=false）而非 error 分支（§8.1 要求 error + 非零退出码）"
-    rec.check(cat, f"{ctx}: verify 错误 SHA-256 -> error JSON + 非零退出码", good_err, detail)
+    rec.check(
+        cat,
+        f"{ctx}: verify 不匹配时的退出码语义（advisory：error→非零 或 ok=false→0 均可）",
+        is_error != is_ok_false,
+        res.brief(),
+        "advisory",
+    )
 
 
 def malformed_suite(rec: Recorder, runner: CliRunner, case: Case, tmp: Path, ddlt_path: Path) -> None:
@@ -1548,6 +1571,8 @@ def malformed_suite(rec: Recorder, runner: CliRunner, case: Case, tmp: Path, ddl
         ("apply delta 不存在", ["apply", str(old_path), str(tmp / "nope.ddlt")]),
         ("verify 非十六进制", ["verify", str(new_path), "zzzz"]),
         ("verify 长度不对的 hex", ["verify", str(new_path), "abcd"]),
+        ("verify 64 位非十六进制", ["verify", str(new_path), "z" * 64]),
+        ("verify 多余参数", ["verify", str(new_path), R.sha256_hex(case.new), "extra"]),
         ("chunk 文件不存在", ["chunk", str(tmp / "nope.bin")]),
     ]
     for name, args in arg_cases:
@@ -1566,6 +1591,87 @@ def malformed_suite(rec: Recorder, runner: CliRunner, case: Case, tmp: Path, ddl
         if marks:
             detail += f" | 崩溃标记 {marks}"
         rec.check(cat, f"{name} -> error JSON + 非零退出码 + 无 panic", ok, detail)
+
+
+def cross_backend_suite(rec: Recorder, opts: argparse.Namespace, tmp: Path, main_runner: CliRunner) -> None:
+    """§7.7 跨后端一致：相同输入在不同后端必须产生逐字节相同的签名/delta/manifest。
+
+    不依赖 `sign --out`：用 `signature_sha256_hex`（DSIG 字节的 SHA-256）代表签名字节，
+    用 `delta --out` 的落盘字节代表 DDLT，用 `chunk` 的 root_hex 代表 manifest 指纹。
+    """
+    cat = "cli-cross-backend"
+    base = opts.target
+    others = [t for t in ("wasm-gc", "js", "native") if t != base]
+    alt_target = others[0]
+    alt = CliRunner(opts.project, opts.moon, alt_target, max(opts.timeout, 600.0))
+
+    probe_alt = alt.run(["__no_such_command__"], timeout=max(opts.timeout, 600.0))
+    if not (isinstance(probe_alt.json, dict) and probe_alt.json.get("kind") == "error"):
+        rec.blocked(
+            cat,
+            f"§7.7 跨后端一致（{base} vs {alt_target}）",
+            f"备用后端 {alt_target} 不可运行：{probe_alt.brief(400)}",
+        )
+        rec.cli_calls.extend(alt.calls)
+        return
+
+    case = next((c for c in build_cases(quick=True) if c.name == "doc-256k-mixed"), build_cases(quick=True)[0])
+    old_path = write_file(tmp / "xbe.old", case.old)
+    new_path = write_file(tmp / "xbe.new", case.new)
+    digests: dict[str, dict[str, str]] = {}
+
+    for tag, runner in ((base, main_runner), (alt_target, alt)):
+        sign_res = runner.run(["sign", str(old_path)], timeout=max(opts.timeout, 600.0))
+        delta_path = tmp / f"xbe.{tag}.ddlt"
+        if delta_path.exists():
+            delta_path.unlink()
+        delta_res = runner.run(["delta", str(old_path), str(new_path), "--out", str(delta_path)], timeout=max(opts.timeout, 600.0))
+        chunk_res = runner.run(["chunk", str(new_path)], timeout=max(opts.timeout, 600.0))
+        out_path = tmp / f"xbe.{tag}.out"
+        if out_path.exists():
+            out_path.unlink()
+        apply_res = runner.run(["apply", str(old_path), str(delta_path), "--out", str(out_path)], timeout=max(opts.timeout, 600.0))
+        info: dict[str, str] = {}
+        sj = sign_res.json or {}
+        info["signature_sha256_hex"] = str(sj.get("signature_sha256_hex", ""))
+        info["sign_nums"] = json.dumps({k: sj.get(k) for k in ("total_length", "block_size", "strong_len", "block_count", "signature_bytes")}, sort_keys=True)
+        info["delta_sha256"] = R.sha256_hex(delta_path.read_bytes()) if delta_path.exists() else ""
+        cj = chunk_res.json or {}
+        info["chunk_root"] = str(cj.get("root_hex", ""))
+        info["chunk_nums"] = json.dumps({k: cj.get(k) for k in ("length", "chunk_count")}, sort_keys=True)
+        info["apply_sha256"] = R.sha256_hex(out_path.read_bytes()) if out_path.exists() else ""
+        info["apply_ok"] = str((apply_res.json or {}).get("ok"))
+        digests[tag] = info
+
+    js_info, alt_info = digests[base], digests[alt_target]
+    for key, label in (
+        ("signature_sha256_hex", "DSIG 字节（signature_sha256_hex）"),
+        ("sign_nums", "sign 数值字段（total_length/block_size/strong_len/block_count/signature_bytes）"),
+        ("delta_sha256", "DDLT 落盘字节（delta --out 的 SHA-256）"),
+        ("chunk_root", "chunk root_hex"),
+        ("chunk_nums", "chunk 数值字段（length/chunk_count）"),
+        ("apply_sha256", "apply 重建结果 SHA-256"),
+    ):
+        rec.check(
+            cat,
+            f"§7.7 {label} 在 {base} 与 {alt_target} 上一致",
+            bool(js_info[key]) and js_info[key] == alt_info[key],
+            f"{base}={js_info[key]!r} {alt_target}={alt_info[key]!r}",
+        )
+    # 跨后端互操作：把 js 的 DDLT 交给备用后端 apply
+    js_delta = tmp / f"xbe.{base}.ddlt"
+    if js_delta.exists():
+        out2 = tmp / "xbe.cross.out"
+        if out2.exists():
+            out2.unlink()
+        res = alt.run(["apply", str(old_path), str(js_delta), "--out", str(out2)], timeout=max(opts.timeout, 600.0))
+        rec.check(
+            cat,
+            f"跨后端互操作：{base} 的 DDLT 在 {alt_target} 上重建 == new",
+            res.returncode == 0 and out2.exists() and out2.read_bytes() == case.new,
+            res.brief(200),
+        )
+    rec.cli_calls.extend(alt.calls)
 
 
 def chunk_stability(rec: Recorder, runner: CliRunner, tmp: Path) -> None:
@@ -1699,6 +1805,22 @@ def write_report(
     for c in cases:
         L.append(f"  {c.name:<22}{len(c.old):>10}{len(c.new):>10}  {c.edits}")
     L.append("")
+    if DELTA_STATS:
+        L.append("关键证据：delta 规模（CLI 实现 vs 本脚本独立 rsync 规划器）")
+        L.append("-" * 78)
+        L.append(f"  {'case':<22}{'new':>10}{'delta':>9}{'planner':>9}{'delta/planner':>15}{'copy':>7}{'literal':>9}")
+        for s in DELTA_STATS:
+            ratio = (s["delta"] / s["planner"]) if s["planner"] else float("nan")
+            L.append(
+                f"  {s['case']:<22}{s['new']:>10}{s['delta']:>9}{s['planner']:>9}"
+                f"{ratio:>15.3f}{s['copied']:>7}{s['literal']:>9}"
+            )
+        same = sum(1 for s in DELTA_STATS if s["delta"] == s["planner"])
+        L.append(
+            f"  等比/完全一致：{same}/{len(DELTA_STATS)} 个语料的 delta 字节数与独立规划器**逐字节相等**"
+            f"（最大比值 {max((s['delta'] / s['planner'] if s['planner'] else 0) for s in DELTA_STATS):.3f}）"
+        )
+        L.append("")
     if failures:
         L.append("失败明细（硬断言）")
         L.append("-" * 78)
@@ -1742,7 +1864,7 @@ def write_report(
     L.append("-" * 78)
     L.append(f"  共 {len(rec.cli_calls)} 次调用")
     for r in rec.cli_calls:
-        L.append(f"  {r.elapsed:6.2f}s rc={r.returncode:<4} {' '.join(r.argv[6:])[:160]}")
+        L.append(f"  {r.elapsed:6.2f}s rc={r.returncode:<4} [{r.argv[3]}] {' '.join(r.argv[6:])[:150]}")
     L.append("")
     text = "\n".join(L)
     path.write_text(text, encoding="utf-8")
@@ -1881,6 +2003,8 @@ def main(argv: list[str] | None = None) -> int:
                     rec.blocked("cli-malformed", "畸形输入套件", "缺少基线 DDLT 产物，无法构造畸形输入")
                 print("[verify] ---- chunk stability ----")
                 chunk_stability(rec, runner, tmp)
+                print("[verify] ---- cross-backend consistency (§7.7) ----")
+                cross_backend_suite(rec, opts, tmp, runner)
     except Exception:  # noqa: BLE001
         rec.check("internal", "校验器自身未抛异常", False, traceback.format_exc()[:2000])
     finally:

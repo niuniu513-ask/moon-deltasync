@@ -10,9 +10,13 @@
 
 | 文件 | 作用 |
 | --- | --- |
-| `dsref.py` | 按 design.md 独立实现的参考语义：Adler-32 变体弱校验（含滑动更新）、XXH64、DSIG/DDLT/DCHK 解析与序列化、delta 重放（逐 op 强校验）、rsync 风格规划器、CDC 参考实现（仅参考） |
+| `dsref.py` | 按 design.md 独立实现的参考语义：Adler-32 变体弱校验（含滑动更新）、XXH64、DSIG/DDLT/DCHK 解析与序列化、delta 重放（逐 op 强校验 + content_digest）、rsync 风格规划器、CDC 参考实现（仅参考） |
 | `verify_deltasync.py` | 自测 + CLI 联调 driver：生成固定种子语料、驱动 CLI、逐项断言、写 `verify-report.txt`、返回退出码 |
-| `verify-report.txt` | 最近一次运行的证据（命令、语料规模、断言数、通过数、失败/阻塞明细、文档歧义清单） |
+| `verify-report.txt` | 最近一次运行的证据（命令、语料规模、断言数、通过数、delta 规模对比表、失败/阻塞明细、文档歧义清单） |
+
+依赖关系：`verify_deltasync.py` 是同目录 `dsref.py` 的唯一调用方（脚本会把自身所在目录加入
+`sys.path` 并 `import dsref`）。两个文件必须放在同一个目录下一起使用；`dsref.py` 不依赖任何
+第三方包，也不被被测项目引用。两者都不会写入 `__pycache__`（脚本设置 `sys.dont_write_bytecode`）。
 
 ## 用法
 

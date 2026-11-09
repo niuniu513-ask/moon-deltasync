@@ -60,7 +60,7 @@ pub fn render_plan_markdown(TransferPlan) -> String
 
 pub fn render_plan_text(TransferPlan) -> String
 
-pub fn render_signature_json(FileSignature, String) -> String
+pub fn render_signature_json(FileSignature, String, String, String) -> String
 
 pub fn sha256(BytesView) -> Bytes
 
@@ -158,6 +158,7 @@ pub fn ChunkStore::ingest(Self, BytesView, params? : ChunkParams) -> IngestRepor
 pub fn ChunkStore::new() -> Self
 pub fn ChunkStore::saved_bytes(Self) -> Int32
 pub fn ChunkStore::stored_bytes(Self) -> Int32
+pub fn ChunkStore::total_bytes_ingested(Self) -> Int32
 pub fn ChunkStore::unique_chunks(Self) -> Int32
 
 pub struct Delta {
@@ -167,11 +168,13 @@ pub struct Delta {
   content_digest : Bytes
   ops : Array[DeltaOp]
 }
+pub fn Delta::copied_blocks(Self) -> Int32
 pub fn Delta::copied_bytes(Self) -> Int32
 pub fn Delta::copy_ops(Self) -> Int32
 pub fn Delta::digest_hex(Self) -> String
 pub fn Delta::encode(Self) -> Bytes
 pub fn Delta::literal_bytes(Self) -> Int32
+pub fn Delta::op_count(Self) -> Int32
 
 pub enum DeltaOp {
   Copy(Int32, Bytes)
@@ -202,10 +205,13 @@ pub struct IngestReport {
 pub struct SnapshotReport {
   total_bytes : Int32
   chunk_count : Int32
+  unique_chunks : Int32
   new_chunks : Int32
   reused_chunks : Int32
   stored_bytes : Int32
   saved_bytes : Int32
+  manifest_bytes : Int32
+  dedup_ppm : Int32
   root_hex : String
 }
 

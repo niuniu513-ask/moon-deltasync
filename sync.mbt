@@ -152,10 +152,14 @@ pub fn signature_matches(signature : FileSignature, old : BytesView) -> Bool {
 pub struct SnapshotReport {
   total_bytes : Int32
   chunk_count : Int32
+  unique_chunks : Int32
   new_chunks : Int32
   reused_chunks : Int32
   stored_bytes : Int32
   saved_bytes : Int32
+  manifest_bytes : Int32
+  /// Saved bytes per million input bytes, so the ratio stays an integer.
+  dedup_ppm : Int
   root_hex : String
 }
 
@@ -167,13 +171,23 @@ pub fn ingest_snapshot(
   params? : ChunkParams,
 ) -> SnapshotReport {
   let ingest = store.ingest(input, params?)
+  let saved = store.saved_bytes()
+  let ingested = store.total_bytes_ingested()
+  let dedup_ppm = if ingested <= 0 {
+    0
+  } else {
+    (saved.to_int64() * 1_000_000L / ingested.to_int64()).to_int()
+  }
   {
     total_bytes: ingest.total_bytes,
     chunk_count: ingest.chunk_count,
+    unique_chunks: store.unique_chunks(),
     new_chunks: ingest.new_chunks,
     reused_chunks: ingest.reused_chunks,
     stored_bytes: store.stored_bytes(),
-    saved_bytes: store.saved_bytes(),
+    saved_bytes: saved,
+    manifest_bytes: ingest.manifest.encode().length(),
+    dedup_ppm,
     root_hex: ingest.manifest.root_hex(),
   }
 }

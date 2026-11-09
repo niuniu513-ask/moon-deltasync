@@ -25,12 +25,19 @@ test "json_string escapes the mandatory characters" {
 test "signature json carries the documented fields" {
   let data = ascii_bytes("hello world")
   let signature = sign_bytes(data[:], block_size=256, strong_len=8)
-  let line = render_signature_json(signature, "hello.txt")
+  let line = render_signature_json(
+    signature,
+    "hello.txt",
+    sha256_hex(data[:]),
+    xxh64_hex(data[:]),
+  )
   assert_eq(line.contains("\"kind\":\"sign\""), true)
   assert_eq(line.contains("\"block_size\":256"), true)
   assert_eq(line.contains("\"strong_len\":8"), true)
   assert_eq(line.contains("\"block_count\":1"), true)
   assert_eq(line.contains("\"signature_bytes\":34"), true)
+  assert_eq(line.contains("\"sha256_hex\":\"" + sha256_hex(data[:]) + "\""), true)
+  assert_eq(line.contains("\"xxh64_hex\":\"" + xxh64_hex(data[:]) + "\""), true)
 }
 
 ///|

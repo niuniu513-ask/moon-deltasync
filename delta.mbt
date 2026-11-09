@@ -75,7 +75,28 @@ pub fn Delta::copy_ops(self : Delta) -> Int32 {
 }
 
 ///|
-/// The number of bytes carried as literals.
+/// The number of operations in the delta.
+pub fn Delta::op_count(self : Delta) -> Int {
+  self.ops.length()
+}
+
+///|
+/// The number of blocks the delta copies from the old data, counting a run as
+/// its length rather than as one operation.
+pub fn Delta::copied_blocks(self : Delta) -> Int {
+  let mut total = 0
+  for op in self.ops {
+    match op {
+      Copy(_, _) => total = total + 1
+      CopyRun(_, count, _) => total = total + count
+      Literal(_) => ()
+    }
+  }
+  total
+}
+
+///|
+/// The number of bytes carried as literals.'
 pub fn Delta::literal_bytes(self : Delta) -> Int32 {
   let mut total = 0
   for op in self.ops {
