@@ -1,0 +1,6 @@
+import {
+  "niuniu513-ask/moon-deltasync" @ds,
+  "moonbitlang/core/encoding/utf8",
+}
+
+pkgtype(kind: "executable")
