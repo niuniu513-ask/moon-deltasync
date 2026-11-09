@@ -158,31 +158,41 @@ moon-deltasync chunk   <path>                       # 分块与去重率报告
 moon-deltasync verify  <path> <sha256-hex>          # 全流校验
 ```
 
+四个子命令的 `--out` 都可省略；省略时只打印 JSON。带 `--out` 时 `sign` / `chunk` / `delta` / `apply` 分别写出 `DSIG` / `DCHK` / `DDLT` / 重建结果。
+
 本仓库里通过 `moon run` 调用：
 
 ```sh
+moon run cmd/main --target js -- sign  old.txt --out old.dsig
 moon run cmd/main --target js -- delta old.txt new.txt --out patch.ddlt
 moon run cmd/main --target js -- apply old.txt patch.ddlt --out rebuilt.txt
+moon run cmd/main --target js -- chunk new.txt --out new.dchk
 ```
 
-每条命令向 stdout 打印**一行** JSON。以下字段是实跑输出，不是示意：
+每条命令向 stdout 打印**一行** JSON。以下是同一对文件（120890 → 120935 字节文本）的实跑输出：
 
 ```json
-{"kind":"sign","path":"old.txt","total_length":120890,"block_size":8192,"strong_len":16,"block_count":15,"signature_bytes":322,"signature_sha256_hex":"add8904b…"}
-{"kind":"delta","old":"old.txt","new":"new.txt","new_length":120935,"copy_ops":2,"copied_bytes":114688,"literal_bytes":8237,"delta_bytes":8346,"delta_sha256_hex":"7830b34f…","savings_ratio":0.9310}
+{"kind":"sign","path":"old.txt","total_length":120890,"block_size":8192,"strong_len":16,"block_count":15,"signature_bytes":322,"signature_sha256_hex":"add8904b…","sha256_hex":"d242f2a7…","xxh64_hex":"8d32c2ca93e03df3"}
+{"kind":"delta","old":"old.txt","new":"new.txt","new_length":120935,"op_count":3,"copy_ops":2,"copy_blocks":14,"copied_bytes":114688,"literal_bytes":8237,"delta_bytes":8346,"delta_sha256_hex":"7830b34f…","savings_ratio":0.9310}
 {"kind":"apply","ok":true,"bytes_written":120935,"blocks_verified":14,"ops_applied":3,"sha256_hex":"970caa0e…"}
-{"kind":"chunk","path":"new.txt","length":120935,"chunk_count":4,"new_chunks":4,"reused_chunks":0,"stored_bytes":120935,"saved_bytes":0,"root_hex":"ba92558c…"}
+{"kind":"chunk","path":"new.txt","length":120935,"chunk_count":4,"unique_chunks":4,"new_chunks":4,"reused_chunks":0,"stored_bytes":120935,"saved_bytes":0,"dedup_ratio":0.0000,"manifest_bytes":190,"root_hex":"ba92558c…"}
 {"kind":"verify","ok":true,"sha256_hex":"970caa0e…"}
-{"kind":"error","code":"format_error","message":"bad magic: expected DSIG, found 0x01020304"}
+{"kind":"error","code":"usage","message":"the expected digest is not hexadecimal"}
 ```
 
-`signature_bytes` 是 `DSIG` 序列化长度（`322 = 22 + 15 × 20`）。`savings_ratio` 由整数 ppm 渲染成 4 位小数，**不受浮点后端差异影响**。字段名以本文与 `report.mbt` 为准。
+字段含义有几处容易混：
 
-三条实测行为，写清楚以免踩坑：
+- `signature_bytes` 是 `DSIG` 序列化长度（`322 = 22 + 15 × 20`）。`sha256_hex` 是**被签名内容**的全流 SHA-256，`xxh64_hex` 是同内容的 XXH64，二者让外部脚本可以独立复核内容；`signature_sha256_hex` 则是 `DSIG` 字节本身的哈希，用于比较两份签名是否相同。
+- `delta` 行同时给出 `op_count`（op 总数）、`copy_ops`（复制 op 数）、`copy_blocks`（复制的块数）、`copied_bytes`（复制字节）。**op 数与块数不是一回事**：本例 3 个 op 里 2 个是复制，覆盖 14 个块。
+- `chunk` 行的 `manifest_bytes` 是 `DCHK` 序列化长度，`dedup_ratio` 是 4 位小数文本；`unique_chunks` / `stored_bytes` / `saved_bytes` 是**存储累计视角**（CLI 每次新建 store，所以等于本文件的数）。
+- `savings_ratio` 由整数 ppm 渲染成 4 位小数，**不受浮点后端差异影响**。
 
-- **`--out` 只对 `delta` 和 `apply` 生效**。`sign --out` 与 `chunk --out` 会被**静默忽略**（返回 0 且不写文件）。需要签名或 manifest 字节时，请调用库的 `FileSignature::encode()` / `ChunkManifest::encode()`。
-- **`verify` 的失败不体现在退出码上**：哈希不符或传入非十六进制字符串时，输出 `{"kind":"verify","ok":false,…}` 且**退出码为 0**。判断成败请看 `ok` 字段。参数错误、文件不可读、格式损坏才返回非零（`code` 为 `usage` / `read_failed` / `format_error` / `write_failed`）。
-- 未知命令返回 `{"kind":"error","code":"usage",…}` 与退出码 1。
+四条实测行为，写清楚以免踩坑：
+
+- **四个子命令的 `--out` 都生效**：`sign` 写 `DSIG`、`chunk` 写 `DCHK`、`delta` 写 `DDLT`、`apply` 写重建结果，写的都是**原始字节**而不是 JSON。实测 `sign --out` 得到 322 字节、`chunk --out` 得到 190 字节，与对应 JSON 里的 `signature_bytes` / `manifest_bytes` 一致。
+- **`verify` 有两档失败，语义不同**：① 参数个数不是 2、摘要不是合法十六进制或不是 32 字节 → `{"kind":"error","code":"usage",…}` 且**退出码 1**；② 摘要合法但与文件不符 → `{"kind":"verify","ok":false,…}` 且**退出码 0**——这是正常结论（「这份文件不是这个摘要」），不是错误。
+- **未知命令与未知参数都返回 `usage` 错误 + 退出码 1**，不会静默丢弃参数（实测 `sign f --bogus` → `unexpected argument: --bogus`）。
+- 文件不可读、格式损坏分别走 `read_failed` / `format_error`，退出码 1。
 
 ## 不变量
 

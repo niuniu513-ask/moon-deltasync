@@ -543,113 +543,37 @@ class ChunkRef:
 
 
 class Manifest:
-    __slots__ = ("chunk_size_hint", "chunks", "root", "min_chunk", "max_chunk", "avg_bits", "layout")
+    __slots__ = ("min_size", "max_size", "mask_bits", "chunks", "root")
 
-    def __init__(
-        self,
-        chunk_size_hint: int,
-        chunks: list[ChunkRef],
-        root: bytes,
-        min_chunk: int = 0,
-        max_chunk: int = 0,
-        avg_bits: int = 0,
-        layout: str = "spec",
-    ):
-        self.chunk_size_hint = chunk_size_hint  # 不参与 §5.3 序列化
+    def __init__(self, min_size: int, max_size: int, mask_bits: int, chunks: list[ChunkRef], root: bytes):
+        self.min_size = min_size
+        self.max_size = max_size
+        self.mask_bits = mask_bits
         self.chunks = chunks
         self.root = root
-        self.min_chunk = min_chunk
-        self.max_chunk = max_chunk
-        self.avg_bits = avg_bits
-        self.layout = layout  # "spec"（§5.3）或 "impl"（实测布局，见 A14）
+
+    @property
+    def chunk_size_hint(self) -> int:  # 兼容旧字段名：avg = 2^mask_bits
+        return 1 << self.mask_bits if self.mask_bits < 63 else 0
 
 
 def _read_varint(buf: bytes, i: int) -> tuple[int, int]:
-    """LEB128 无符号 varint（§3 foundation.mbt 提到 varint，但 §5.3 未使用）。"""
+    """§5.3 无符号 LEB128 varint；解析时最多 10 字节，超出即 Truncated。"""
     value = 0
     shift = 0
+    consumed = 0
     while True:
         if i >= len(buf):
             raise FormatError("truncated varint")
         byte = buf[i]
         i += 1
+        consumed += 1
+        if consumed > 10:
+            raise FormatError("varint longer than 10 bytes")
         value |= (byte & 0x7F) << shift
         if not byte & 0x80:
             return value, i
         shift += 7
-        if shift > 63:
-            raise FormatError("varint too long")
-
-
-def parse_dchk(data: bytes, chunk_size_hint: int = 0) -> Manifest:
-    r = Reader(data)
-    magic = r.take(4)
-    if magic != b"DCHK":
-        raise FormatError(f"bad magic {magic!r}, expected b'DCHK'")
-    version = r.u8()
-    if version != 1:
-        raise FormatError(f"unsupported DCHK version {version}")
-    chunk_count = r.u32()
-    need = chunk_count * 36 + 32
-    if r.remaining() != need:
-        raise FormatError(
-            f"DCHK payload {r.remaining()} byte(s) != chunk_count*36+32 = {need}"
-        )
-    chunks = []
-    for _ in range(chunk_count):
-        digest = r.take(32)
-        length = r.u32()
-        chunks.append(ChunkRef(digest, length))
-    root = r.take(32)
-    return Manifest(chunk_size_hint, chunks, root)
-
-
-def serialize_dchk(manifest: Manifest) -> bytes:
-    out = bytearray()
-    out += b"DCHK"
-    out.append(1)
-    out += _be32(len(manifest.chunks))
-    for c in manifest.chunks:
-        out += c.digest
-        out += _be32(c.length)
-    out += manifest.root
-    return bytes(out)
-
-
-def parse_dchk_impl(data: bytes) -> Manifest:
-    """解析**实测的被测实现布局**（不是 §5.3）：
-
-        "DCHK"(4) version:u8=1 min:u32 max:u32 avg_bits:u8 chunk_count:u32
-        repeat chunk_count 次: sha256:u8[32] length:varint
-        root:u8[32]
-
-    该布局由 2026-11-09 的 CLI 输出反推（header 18 字节 + 每条记录 32B 摘要 + varint 长度），
-    与 design.md §5.3 不一致，见报告歧义 A14。本函数只用于在「§5.3 解析失败」后继续做
-    结构性校验（root 重算、长度守恒、块长上下界、指纹复用），不改变格式契约判断。
-    """
-    r = Reader(data)
-    if r.take(4) != b"DCHK":
-        raise FormatError("bad magic, expected b'DCHK'")
-    version = r.u8()
-    if version != 1:
-        raise FormatError(f"unsupported DCHK version {version}")
-    min_chunk = r.u32()
-    max_chunk = r.u32()
-    avg_bits = r.u8()
-    chunk_count = r.u32()
-    if max_chunk == 0 or min_chunk > max_chunk:
-        raise FormatError(f"implausible chunk bounds min={min_chunk} max={max_chunk}")
-    if chunk_count > r.remaining():
-        raise FormatError(f"chunk_count {chunk_count} exceeds remaining payload {r.remaining()}")
-    chunks: list[ChunkRef] = []
-    for _ in range(chunk_count):
-        digest = r.take(32)
-        length, r.i = _read_varint(data, r.i)
-        chunks.append(ChunkRef(digest, length))
-    root = r.take(32)
-    if r.remaining() != 0:
-        raise FormatError(f"DCHK has {r.remaining()} trailing byte(s)")
-    return Manifest(1 << avg_bits if avg_bits < 63 else 0, chunks, root, min_chunk, max_chunk, avg_bits, "impl")
 
 
 def _encode_varint(value: int) -> bytes:
@@ -662,6 +586,66 @@ def _encode_varint(value: int) -> bytes:
         else:
             out.append(byte)
             return bytes(out)
+
+
+def parse_dchk(data: bytes) -> Manifest:
+    """§5.3（2026-11-09 修订）：DCHK v1
+
+        "DCHK"(4) version:u8=1 min_size:u32 max_size:u32 mask_bits:u8 chunk_count:u32
+        repeat chunk_count 次: sha256:u8[32] length:varint
+        root:u8[32]
+
+    解析后重算 root 与尾部比较（§5.3 要求 BadField）。
+    """
+    r = Reader(data)
+    magic = r.take(4)
+    if magic != b"DCHK":
+        raise FormatError(f"bad magic {magic!r}, expected b'DCHK'")
+    version = r.u8()
+    if version != 1:
+        raise FormatError(f"unsupported DCHK version {version}")
+    min_size = r.u32()
+    max_size = r.u32()
+    mask_bits = r.u8()
+    chunk_count = r.u32()
+    if min_size == 0 or max_size == 0 or min_size > max_size:
+        raise FormatError(f"BadField: implausible chunk bounds min={min_size} max={max_size}")
+    if mask_bits >= 64:
+        raise FormatError(f"BadField: mask_bits {mask_bits} >= 64")
+    # 每条记录至少 32 字节摘要 + 1 字节 varint
+    if chunk_count * 33 > r.remaining():
+        raise FormatError(
+            f"Truncated: chunk_count {chunk_count} needs >= {chunk_count * 33} byte(s), "
+            f"remaining {r.remaining()}"
+        )
+    chunks: list[ChunkRef] = []
+    for _ in range(chunk_count):
+        digest = r.take(32)
+        length, r.i = _read_varint(data, r.i)
+        chunks.append(ChunkRef(digest, length))
+    root = r.take(32)
+    if r.remaining() != 0:
+        raise FormatError(f"BadField: DCHK has {r.remaining()} trailing byte(s)")
+    if root != manifest_root(chunks):
+        raise FormatError(
+            f"BadField: root {root.hex()} != sha256(concat(chunk sha256)) {manifest_root(chunks).hex()}"
+        )
+    return Manifest(min_size, max_size, mask_bits, chunks, root)
+
+
+def serialize_dchk(manifest: Manifest) -> bytes:
+    out = bytearray()
+    out += b"DCHK"
+    out.append(1)
+    out += _be32(manifest.min_size)
+    out += _be32(manifest.max_size)
+    out.append(manifest.mask_bits)
+    out += _be32(len(manifest.chunks))
+    for c in manifest.chunks:
+        out += c.digest
+        out += _encode_varint(c.length)
+    out += manifest.root
+    return bytes(out)
 
 
 def manifest_root(chunks: list[ChunkRef]) -> bytes:
