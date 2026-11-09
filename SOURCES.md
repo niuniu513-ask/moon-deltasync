@@ -1,8 +1,23 @@
 # 来源、选题边界与有限查重
 
-检索日期：2026-11-09（Asia/Shanghai）。数据源是本地保存的 mooncakes 全量索引快照 `D:\moonbit\contest-submission\mooncakes-index-20261026.json`，快照日期 2026-10-26，共 **3,337** 个包记录。
+检索日期：2026-11-09（Asia/Shanghai）。主数据源是本地保存的 mooncakes 全量索引快照 `D:\moonbit\contest-submission\mooncakes-index-20261026.json`，快照日期 2026-10-26，共 **3,337** 个包记录。
 
-结论一句话：**在上述快照的名称、描述与 keywords 字段范围内，`rsync`、`delta sync`、`delta encoding`、`rolling hash` 四个词 0 命中；但「二进制 delta」与「内容定义分块 + 去重」的能力在生态中确实已存在（见下文相邻包比对），因此本项目不主张生态空白，只主张「块签名 + 可逐块校验的 delta + 内容定义分块」三者落在同一个库内、并逐字节跨四后端一致的组合未被找到。** 这不是「任何项目都不重合」的承诺，也不是赛事立项结论。
+结论一句话：**在快照的名称与描述字段范围内，`rsync`、`delta sync`、`delta encoding`、`rolling hash` 四个词 0 命中；但在线注册表已经变化（见下），且「二进制 delta」与「内容定义分块 + 去重」的能力在生态中本来就存在，因此本项目不主张生态空白，只主张「块签名 + 可逐块校验的 delta + 内容定义分块」三者落在同一个库内、并逐字节跨四后端一致的组合未被找到。** 这不是「任何项目都不重合」的承诺，也不是赛事立项结论。
+
+**快照之后的变化（必须和第 3 段一起读）**：2026-11-09 直接查询在线注册表（`https://mooncakes.io/api/v0/modules?limit=10000&offset=0`）得到 **3,665** 个包。按名称+描述重跑同一组关键词：
+
+| 关键词 | 快照（3,337，2026-10-26） | 在线（3,665，2026-11-09） | 变化 |
+| --- | --- | --- | --- |
+| `rsync` | 0 | **1**（`YKDshaxing/moonlibsync`） | 新增一个包；本项目自身不在该口径内（它的 `rsync` 只出现在 keywords，名称与描述都不含该词） |
+| `delta sync` | 0 | 0 | — |
+| `delta encoding` | 0 | 0 | — |
+| `rolling hash` | 0 | 0 | — |
+| `content-defined` | 2 | 2（不含自身） | 计数含本项目自身时为 3 |
+| `deduplicat` | 4 | 4（不含自身） | 计数含自身时为 5 |
+| `content-address` | 3 | 3 | — |
+| `merkle` | 3 | 3 | — |
+
+也就是说：**「`rsync` 0 命中」这个说法只对 2026-10-26 的快照成立，现在已经不成立**。`YKDshaxing/moonlibsync`（v0.1.0，LGPL-2.1-or-later，2026-11-09 发布，自述「Librsync-compatible byte-buffer library and Native single-file CLI」，keywords 含 `librsync` / `delta` / `sync`）是目前最接近的相邻项目——librsync 本身就是 rsync 算法的库化实现。它不改变本项目「不主张生态空白」的立场，反而进一步说明不能把「某个词没命中」当作空白证明。
 
 ## 检索方法与局限
 
@@ -57,6 +72,7 @@ $entries | Where-Object { ($_.Name + ' ' + $_.Desc) -match 'rsync' } | Measure-O
 
 | 包（索引版本） | 索引中声明的能力 | 与本项目的关系 | 本项目不主张的 |
 | --- | --- | --- | --- |
+| `YKDshaxing/moonlibsync` v0.1.0，LGPL-2.1-or-later，**2026-11-09 新增，不在 3,337 快照内**，kw 含 `librsync` / `delta` / `sync` | 自述「Librsync-compatible byte-buffer library and Native single-file CLI」 | **最接近的相邻项目**：librsync 是 rsync 算法的库化实现，同属「签名 → delta → patch」这一族；发布时间只比本项目早约 1 小时 | 不主张「MoonBit 没有 rsync 类库」；本项目格式是自定义的 `DSIG`/`DDLT`/`DCHK`，与 librsync 格式不互通，也未做互操作测试；其许可证是 LGPL-2.1-or-later，本项目 MIT 且无代码关系。其自述只提 Native 单文件 CLI，本项目在 js / wasm / wasm-gc / native 上跑同一套测试 |
 | `cn-ybm/MoonHashKit` v0.3.0，Apache-2.0，kw 含 `rolling` / `content-defined-chunking` / `dedupe` / `sync` | 内容定义分块、rolling 指纹、去重 | **正面重叠**：§6.4 的 CDC 与去重目的与其一致 | 不主张 CDC / rolling 指纹 / 去重本身是新增贡献；差异只在本项目还提供 `DSIG`/`DDLT` 两段与逐块强校验重建 |
 | `xgzh1111/moonchunk` v0.1.0，Apache-2.0，kw 含 `chunking` / `deduplication` / `merkle` / `sync` / `storage` | 「内容定义分块与增量同步原语」 | 措辞上与本文「增量传输」最接近；同属分块 + 同步 | 不主张「MoonBit 没有增量同步原语」；无法从索引判断其 delta 是否逐块强校验，因此**也不主张它没有** |
 | `yangxixi00/moon_vcdiff` v0.1.0，Apache-2.0，kw 含 `vcdiff` / `delta` / `binary` / `rfc3284` | RFC 3284 VCDIFF 编解码器、inspector 与 CLI | 已有标准化**二进制 delta 格式**实现 | 不主张「MoonBit 没有二进制 delta」；差异在格式与验收：VCDIFF 是 RFC 定义的指令流，本项目是定长头 + weak/strong 块签名 + `COPY`/`COPY_RUN`/`LITERAL` 规范化 + apply 逐块强校验，未做 VCDIFF 互操作，也不是其移植 |
@@ -88,11 +104,14 @@ $entries | Where-Object { ($_.Name + ' ' + $_.Desc) -match 'rsync' } | Measure-O
 - 与上表所有包**无代码依赖、无移植关系、无作者背书**；未与其作者沟通，也未提交适配层。
 - 本项目自己的 `moon.mod` 在 `keywords` 中声明了 `rsync` / `delta` / `incremental` / `content-defined-chunking` / `deduplication`。其中 `rsync` 一词在索引快照中 0 命中，说明该词此前未被占用；这不构成原创性证明，只说明该检索词是有效的区分度检验。
 
-## 待确认（本地无法核实）
+## 发布状态与残余不确定
 
-以下事项**未**在本文件中被当作已通过，需在提交前单独核实：
+**已核实**（2026-11-09 用 `gh` 与 mooncakes 注册表 API 直接查询，不是推测）：
 
-1. **GitHub 远端状态**：本机 `git` 记录显示仓库已初始化，`origin` 为 `https://github.com/niuniu513-ask/moon-deltasync.git`，`refs/heads/main` 与 `refs/remotes/origin/main` 指向同一提交（`353ae62`，reflog 14 条），这与「已推送过」相符。但本会话无外网（向 GitHub 的请求失败），无法核对远端可访问性、默认分支或 CI 运行结果，因此**不表述为「已推送成功」**。
-2. **是否已发布到 mooncakes.io**：2026-10-26 快照中检索 `deltasync` 为 0 命中，该快照下 `niuniu513-ask` 只有 `moon-postal` 与 `MoonRetrieve` 两个包。这只说明**快照时点**未发布，不说明现在未发布。
-3. **相邻包的实际实现深度**：本文件只读索引元数据。上表中「其能力」是**其自我声明**，未验证是否完整、是否与描述一致。若需更强的比对结论，必须逐个拉取源码与 README 复核。
-4. **快照时效**：索引快照为 2026-10-26，检索执行于 2026-11-09，中间新增/撤包未覆盖；提交前应重新拉取索引并重跑上面的复现命令。
+1. **GitHub**：`niuniu513-ask/moon-deltasync` 为 **PUBLIC** 仓库，默认分支 `main`；本机 `refs/heads/main` 与 `refs/remotes/origin/main` 指向同一提交（仓库仍在活跃提交，SHA 会变）。CI 在 `main` 上最近若干次运行均 `success`（`gh run list` 复核）。
+2. **mooncakes**：`niuniu513-ask/moon-deltasync@0.1.1` 已发布（MIT，`is_new: true`，`created_at` 2026-11-09T14:32:03Z）。它在 2026-10-26 的快照里当然不存在——那是快照时点的事实，不是现在的状态。
+
+**仍未被本文件核实**的部分：
+
+1. **相邻包的实际实现深度**：本文件只读索引元数据。上表中「其能力」是**其自我声明**，未验证是否完整、是否与描述一致。若需更强的比对结论，必须逐个拉取源码与 README 复核。`YKDshaxing/moonlibsync` 尤其如此：只据其描述与 keywords 归类，未读其格式文档，因此不对「librsync 兼容到什么程度」下判断。
+2. **快照时效**：逐关键词统计基于 2026-10-26 的快照（3,337 包）；在线注册表已是 3,665 包，中间新增/撤回的包只复核了上面那八个关键词，未做全量差异审计。提交前应重新拉取索引并重跑复现命令。

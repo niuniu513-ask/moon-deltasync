@@ -253,22 +253,22 @@ moon run cmd/main --target js -- verify new.txt <64-hex>
 - **四个后端结果必须逐字节相同**（不变量 7）：`js` 与 `native` 的 delta 字节不同就是缺陷，不能当成「实现差异」放过。
 - **`verify` 的退出码不等于「文件正确」**：`ok:false` 时退出码是 0（见 8.2 第 2 条）；只有 `code:"usage"` 之类才是非零。
 
-## 11. 契约对齐状态（逐条复核于 2026-11-09）
+## 11. 契约对齐状态（逐条复核于 2026-11-09，对应 commit `4b0f12d`）
 
 | design.md 位置 | 检查项 | 状态 |
 | --- | --- | --- |
-| §8.1 sign 示例 | 含 `sha256_hex`、`xxh64_hex`、`signature_bytes 2582` | **已对齐**，实现输出这三个字段 |
-| §8.1 delta 示例 | `op_count`、`copy_ops`、`copy_blocks`、`copied_bytes` | **已对齐**，四个字段都在（实测 `3 / 2 / 14 / 114688`） |
-| §8.1 chunk 示例 | `unique_chunks`、`dedup_ratio`、`manifest_bytes` 等 | **已对齐**，并保留 `new_chunks`/`reused_chunks`/`stored_bytes`/`saved_bytes` |
-| §8.1 apply 示例 | `ops_applied` | **已对齐** |
-| §8 / §8.1 退出码 | 非法摘要 → `error` + 非零；摘要不匹配 → `ok:false` + 0 | **已对齐**，实测 `zzzz` → `usage` rc=1，错哈希 → `ok:false` rc=0 |
-| §8 / §8.1 `--out` | `sign`/`chunk`/`delta`/`apply` 各自导出 | **已对齐**，实测 322 B / 190 B |
-| §5.2 `DDLT` 布局 | `content_digest:u8[32]` + 每个复制 op 带 `strong` | **已对齐** |
-| §5.3 `DCHK` 布局 | 头部 `min_size/max_size/mask_bits`，块长 `varint` | **已对齐** |
-| §6.3 delta 生成 | 窗口滑过**新数据**、反查旧块签名表 | **已对齐** |
+| §4 类型声明块 | `Int32`/`UInt32`、`Copy(Int32, Bytes)`、`CopyRun(Int32, Int32, Bytes)`、`Delta.content_digest`、`ChunkManifest.params : ChunkParams` | **已对齐**（照 §4 抄代码现在能编译） |
 | §4 错误类型 | `FormatError` 8 个构造子 | **已对齐** |
-| §3 模块表 | `WeakRoll` 归在 `hash.mbt` | **已对齐**（不再列 `rolling.mbt`） |
-| §4 类型声明块 | `BlockSignature` 用 `Int`/`UInt`；`DeltaOp::Copy(Int)`；`Delta` 无 `content_digest`；`ChunkManifest` 用 `chunk_size_hint` | **仍不一致 ①**：实际是 `Int32`/`UInt32`、`Copy(Int32, Bytes)`、`CopyRun(Int32, Int32, Bytes)`、`Delta.content_digest : Bytes`、`ChunkManifest.params : ChunkParams`。语义在 §5.2 已描述正确，只是 §4 的代码块没跟上 |
-| §8.1 末尾注 | 「`--out` 用于把 `DSIG` 或 `DDLT` 的原始字节写到文件」 | **仍不一致 ②**：与同节上方第 205 行的说明（四个子命令各自导出）矛盾，也未提重建结果与 `DCHK` |
+| §3 模块表 | `WeakRoll` 归在 `hash.mbt`，不再列 `rolling.mbt` | **已对齐** |
+| §5.2 `DDLT` 布局 | `content_digest:u8[32]` + 每个复制 op 带 `strong` | **已对齐** |
+| §5.3 `DCHK` 布局 | 头部 `min_size`/`max_size`/`mask_bits`，块长 `varint` | **已对齐** |
+| §6.3 delta 生成 | 窗口滑过**新数据**、反查旧块签名表 | **已对齐** |
+| §8 synopsis | `sign`/`chunk` 也列了 `--out` | **已对齐** |
+| §8.1 退出码 | 非法摘要 → `error` + 非零；摘要不匹配 → `ok:false` + 0 | **已对齐**，实测 `zzzz` → `usage` rc=1，错哈希 → `ok:false` rc=0 |
+| §8.1 `--out` 说明 | 本节开头与末尾两处说明一致，列出四个子命令各自导出什么 | **已对齐**（原先末尾那句只说 `DSIG`/`DDLT`，已改写） |
+| §8.1 sign 示例 | `sha256_hex`、`xxh64_hex`、`signature_bytes 2582` | **已对齐** |
+| §8.1 delta 示例 | `op_count`、`copy_ops`、`copy_blocks`、`copied_bytes` | **已对齐**（实测 `3 / 2 / 14 / 114688`） |
+| §8.1 chunk 示例 | `unique_chunks`、`dedup_ratio`、`manifest_bytes` | **已对齐**，且 `manifest_bytes` 的算法（`18 + Σ(32 + varint)` + 32）与实测一致 |
+| §8.1 apply 示例 | `ops_applied` | **已对齐** |
 
-也就是：上一轮列出的 10 处差异**全部已对齐**，现在只剩上面 2 处（都属 design.md 的表述问题，实现不需要改）。这两条已提交给维护者。
+**未对齐：0 条。** 上一轮遗留的两处（§4 的类型声明代码块、§8.1 末尾的 `--out` 注）已在 `4b0f12d` 修掉并复核。外部校验器的最新一轮（硬断言 775/775、阻塞 0）是这份对齐状态的独立佐证。

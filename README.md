@@ -55,7 +55,11 @@ moon run   examples/corruption_check --target js
 
 JS 后端需要 Node.js；`wasm`、`wasm-gc` 由 `moonrun` 直接执行；native 后端需要 MSVC（`cl.exe`/`clang-cl`），本机未安装，见下文「验证状态」。四个后端必须产生**逐字节相同**的签名、delta 与 manifest（不变量 7）；本机已在 js / wasm / wasm-gc 上跑通，native 由 CI 覆盖。
 
-作为依赖引用（发布到 mooncakes.io 之后）：
+已发布到 Mooncakes：`niuniu513-ask/moon-deltasync@0.1.1`（MIT）。在另一个包里引用：
+
+```sh
+moon add niuniu513-ask/moon-deltasync@0.1.1
+```
 
 ```moonbit
 import {
@@ -226,11 +230,13 @@ moon run cmd/main --target js -- chunk new.txt --out new.dchk
 
 在 mooncakes 全量索引快照（3,337 个包，`mooncakes-index-20261026.json`）中按名称与描述检索：`rsync`、`delta sync`、`delta encoding`、`rolling hash` **均为 0 命中**；`content-defined` 命中 2 个（`cn-ybm/MoonHashKit`、`xgzh1111/moonchunk`），`deduplicat` 4 个，`content-address` 3 个，`merkle` 3 个。
 
-扩大口径到 `keywords` 字段后，相邻能力更清楚地暴露出来：`yangxixi00/moon_vcdiff`（RFC 3284 VCDIFF 二进制 delta）、`bzhangui/moonrestore`（可验证增量备份 + 内容寻址）、`yuzhiblue/moon-diff`（文本 LCS/Myers diff、git patch）、`gaato/*`（流式解压缩 codec）、`zploc/loci`、`ggbond44439/moonloom`、`Yingqingxue/mooncas`、`any07557-wq/moonvcs`。
+**这一组数字在 2026-11-09 的在线注册表上已经变了**：在线共 3,665 个包，`rsync` 在名称+描述口径下命中 **1** 个——`YKDshaxing/moonlibsync`（LGPL-2.1-or-later，2026-11-09 发布，自述「Librsync-compatible byte-buffer library and Native single-file CLI」，keywords 含 `librsync`/`delta`/`sync`）。这是目前最接近的相邻项目，因为 librsync 本身就是 rsync 算法的库化实现。`delta sync`、`delta encoding`、`rolling hash` 在在线索引中仍为 0 命中；`content-defined`、`deduplicat` 的在线计数比快照各多 1 个，因为本项目自身已发布进索引。
 
-因此本项目**不宣称**「MoonBit 生态没有增量传输 / 去重 / 内容寻址相关代码」——那是不成立的。它主张的是：把块签名、可逐块校验的 delta、内容定义分块放在**同一个库、同一套字节格式**里，并在四个后端上逐字节一致。逐包比对、检索命令与命中计数见 [SOURCES.md](SOURCES.md)；本库与上述包无代码依赖、无移植关系、无作者背书。
+扩大口径到 `keywords` 字段后，相邻能力更清楚地暴露出来：`yangxixi00/moon_vcdiff`（RFC 3284 VCDIFF 二进制 delta）、`YKDshaxing/moonlibsync`（librsync 兼容）、`bzhangui/moonrestore`（可验证增量备份 + 内容寻址）、`yuzhiblue/moon-diff`（文本 LCS/Myers diff、git patch）、`gaato/*`（流式解压缩 codec）、`zploc/loci`、`ggbond44439/moonloom`、`Yingqingxue/mooncas`、`any07557-wq/moonvcs`。
 
-## 验证状态与已知不一致
+因此本项目**不宣称**「MoonBit 生态没有增量传输 / 去重 / 内容寻址相关代码」——那是不成立的，librsync 兼容的包与 VCDIFF 编解码器都在。它主张的是：把块签名、可逐块校验的 delta、内容定义分块放在**同一个库、同一套字节格式**里，delta 自带逐 op 强校验与整体 `content_digest`，并在四个后端上逐字节一致；本项目用的是自定义的 `DSIG`/`DDLT`/`DCHK` 格式，与 librsync、VCDIFF 都不互通。逐包比对、检索命令与命中计数见 [SOURCES.md](SOURCES.md)；本库与上述包无代码依赖、无移植关系、无作者背书。
+
+## 验证状态
 
 **本机实测**（2026-11-09，`moonc v0.10.17+d971670cd`）：
 
@@ -245,26 +251,39 @@ moon run cmd/main --target js -- chunk new.txt --out new.dchk
 | CLI 端到端 | `sign`→`delta`→`apply` 重建结果与新文件 SHA-256 一致；`verify` 与 PowerShell `Get-FileHash` 一致 |
 | CLI `--out` 四个子命令 | 全部写出原始字节：`sign` 322 B（= `signature_bytes`）、`chunk` 190 B（= `manifest_bytes`）、`delta` 与 `apply` 同样落地，均与 JSON 内的字节数一致 |
 
-CI（`.github/workflows/ci.yml`）在 ubuntu-latest 上跑 `check`/`build`/`test --target all`，并用 `moon fmt` + `git diff --exit-code` 与 `moon info` + `git diff --exit-code` 检查格式化与接口文件是否稳定。
+CI（`.github/workflows/ci.yml`）在 ubuntu-latest 上跑 `check`/`build`/`test --target all`，并用 `moon fmt` + `git diff --exit-code` 与 `moon info` + `git diff --exit-code` 检查格式化与接口文件是否稳定。`main` 上最近若干次运行均为 `success`（`gh run list` 复核，最近一次耗时 36s）。
 
-**外部独立校验器**：`scripts/` 下的 Python 工具按 design.md 语义**独立重写**了弱校验、XXH64、三个格式的解析与 delta 重放，用来交叉验证本实现。它**最近一次落盘的报告早于本轮 CLI 修正**（`scripts/verify-report.txt`，2026-11-09 22:24：硬断言 429/460 通过、31 失败、3 阻塞、退出码 1），那批问题的成因都已修掉并有本机复测佐证：
+**外部独立校验器**：`scripts/` 下的 Python 工具按 design.md 语义**独立重写**了弱校验、XXH64、三个格式的解析与 delta 重放，用来交叉验证本实现；它不读本仓库的 `.mbt` 源码。最近一次运行（`scripts/verify-report.txt`，生成于 2026-11-09 22:37:47，耗时 24.3s）的结论是：
 
-| 报告里的问题类别 | 当时的成因 | 现状 |
-| --- | --- | --- |
-| sign 结构断言失败 | 缺 `sha256_hex` / `xxh64_hex` | 已补，本机复测存在 |
-| delta 结构断言失败 | 缺 `op_count` / `copy_blocks` | 已补（同时保留 `copy_ops` / `copied_bytes`） |
-| chunk 结构断言失败 | 缺 `unique_chunks` / `dedup_ratio` / `manifest_bytes` | 已补（同时保留 `new_chunks` / `reused_chunks` / `stored_bytes` / `saved_bytes`） |
-| 3 个阻塞项 | `sign --out` / `chunk --out` 不产出字节，第三方拿不到 `DSIG` / `DCHK` | 已生效，实测写出 322 B / 190 B |
-| verify 退出码分歧 | 非法摘要也走 `ok:false` + rc=0 | 非法摘要改为 `usage` + rc=1；摘要不匹配仍是 `ok:false` + rc=0 |
+| 指标 | 结果 |
+| --- | --- |
+| 硬断言 | **775 / 775 通过，0 失败** |
+| advisory（不计入失败） | 26 / 26 |
+| 阻塞项 | **0** |
+| 退出码 | **0**（0 = 硬断言全过；1 = 有硬断言失败；2 = 自测通过但 CLI 联调被阻塞） |
 
-因此**不要引用那份报告的数字代表当前状态**——它尚未重跑。要拿到当前结论，请运行 `python scripts/verify_deltasync.py` 生成新报告。该报告是**外部佐证**，不是官方验收结论。契约与实现的对齐状态逐条列在 [docs/usage.md](docs/usage.md) §11。
+分类覆盖 selftest（hash 4、weak 3、format 36、replay 9、planner 5、cdc 4）与 CLI（sign 190、delta 200、apply 80、interop 30、chunk 154、verify 21、malformed 29、chunk-stability 2、cross-backend 7）。其中四条证据特别值得单独看：
 
-## 待确认
+- **delta 字节数与校验器自己的独立 rsync 规划器逐字节相等**（10/10 语料，ratio 1.000，最大 96755 B / 2 MiB 语料）——规划质量不是自评出来的。
+- **双向互操作 30/30**：它用自己生成的 `DDLT` 喂 CLI `apply`，重建逐字节相同；CLI 产出的 delta 用它的独立重放器也能重建。
+- **跨后端 `js` vs `wasm-gc` 7/7 一致**；弱校验与 `zlib.adler32` 逐位一致（含空窗口），滑动更新 20034 次滑窗与直接计算一致。
+- **畸形输入 29/29 只报错、不崩溃**。§7.5 分块稳定性与 `DSIG`/`DCHK` 导出两项阻塞均已解除。
 
-本地无法核实、因此不写成结论的事项：
+复现：在仓库根目录执行 `D:\anaconda3\python.exe scripts\verify_deltasync.py`（或在 `scripts/` 下执行 `--mode auto`）。该报告是**外部佐证**，不是官方验收结论。契约与实现的对齐状态逐条列在 [docs/usage.md](docs/usage.md) §11。
 
-1. **远端仓库状态**：本机 `git` 记录显示仓库已初始化、`origin` 为 `https://github.com/niuniu513-ask/moon-deltasync.git`，且会话读取时 `refs/heads/main` 与 `refs/remotes/origin/main` 指向同一提交（仓库仍在活跃提交，此 SHA 会变；本轮修正的 `3cda3fb`、`d54b7fb` 都在本机 reflog 里）。但本会话无外网，无法向 GitHub 核对远端可访问性与 CI 运行结果，故不表述为「已推送成功」。
-2. **mooncakes 发布状态**：该包不在 2026-10-26 的索引快照中（快照时点未发布）；当前是否已发布未核实，`moon add` 在确认前不保证可用。
+## 发布状态与残余不确定
+
+**已核实的发布事实**（2026-11-09 用 `gh` 与 mooncakes 注册表 API 直接查询）：
+
+- **GitHub**：`niuniu513-ask/moon-deltasync` 是 **PUBLIC** 仓库，默认分支 `main`，本机 `main` 与 `origin/main` 指向同一提交（仓库仍在活跃提交，SHA 会变）。
+- **CI**：`gh run list` 显示 `main` 上最近若干次运行均为 `success`，最近一次是「docs: make the type declarations and the --out note match the code」，耗时 36s。
+- **Mooncakes**：`niuniu513-ask/moon-deltasync@0.1.1` 已发布（MIT，`is_new: true`，创建于 2026-11-09），因此上面的 `moon add` 可用。
+
+仍然只是「未被本文核实」、而不是「已知有问题」的部分：
+
+1. **CI 只看了最近几次运行**：没有逐条回溯全部历史运行结果，也没有核对分支保护、必需检查等仓库设置。
+2. **相邻包的实现深度**：`SOURCES.md` 的逐包比对基于**索引元数据**（名称、描述、keywords、许可证、仓库地址），没有阅读任何相邻包的源码或 README 正文，因此不对其能力细节下定论。
+3. **检索快照时效**：逐关键词统计基于 2026-10-26 的快照；2026-11-09 的在线注册表为 3,665 个包，中间新增的包（包括 `moonlibsync`）已在上文单独说明，但未对全部新增包重做逐项比对。
 
 ## 许可证
 
