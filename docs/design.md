@@ -40,35 +40,42 @@
 
 ```moonbit
 pub struct BlockSignature {
-  index : Int          // 块序号，从 0 开始
-  weak : UInt          // 弱校验
-  strong : Bytes       // 强校验，长度 = strong_len
+  index : Int32         // 块序号，从 0 开始
+  weak : UInt32         // 弱校验
+  strong : Bytes        // 强校验，长度 = strong_len
 }
 
 pub struct FileSignature {
-  block_size : Int
-  strong_len : Int
-  total_length : Int   // 被签名数据的字节数
+  block_size : Int32
+  strong_len : Int32
+  total_length : Int32  // 被签名数据的字节数
   blocks : Array[BlockSignature]
 }
 
 pub enum DeltaOp {
-  Copy(Int)                 // 复制旧数据的第 index 块
-  CopyRun(Int, Int)         // 从 start 块开始连续复制 count 块
-  Literal(Bytes)            // 直接携带新数据
+  Copy(Int32, Bytes)          // 复制第 index 块，并校验它等于 strong
+  CopyRun(Int32, Int32, Bytes) // 从 start 起连续 count 块，并校验拼接结果等于 strong
+  Literal(Bytes)               // 直接携带新数据
 }
 
 pub struct Delta {
-  block_size : Int
-  strong_len : Int
-  new_length : Int
+  block_size : Int32
+  strong_len : Int32
+  new_length : Int32
+  content_digest : Bytes       // 目标数据的 SHA-256，apply 结束时比对
   ops : Array[DeltaOp]
 }
 
+pub struct ChunkParams {
+  min_size : Int32
+  max_size : Int32
+  mask_bits : Int32
+}
+
 pub struct ChunkManifest {
-  chunk_size_hint : Int
-  chunks : Array[ChunkRef]  // sha256 + length
-  root : Bytes              // 所有块指纹拼接后的 SHA-256
+  params : ChunkParams        // 分块参数随 manifest 存储，重建才能复现同样的边界
+  chunks : Array[ChunkRef]    // sha256 + length
+  root : Bytes                // 所有块指纹拼接后的 SHA-256
 }
 ```
 
@@ -222,8 +229,8 @@ moon-deltasync verify  <file> <sha256-hex>         # 全流校验
 {"kind":"verify","ok":true,"sha256_hex":"…64位…"}
 ```
 
-`--out <path>` 用于把 `DSIG` 或 `DDLT` 的原始字节写到文件；`savings_ratio` 定义为
-`1 - delta_bytes / new_length`（裁剪到 `[0,1]`，保留 4 位小数）。
+`savings_ratio` 定义为 `1 - delta_bytes / new_length`（裁剪到 `[0,1]`，保留 4 位小数）。
+`--out` 的导出对象见本节开头的说明：`sign` 写 `DSIG`，`delta` 写 `DDLT`，`apply` 写重建结果，`chunk` 写 `DCHK`。
 
 ## 9. 明确不做的事
 

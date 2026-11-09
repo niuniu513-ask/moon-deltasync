@@ -926,25 +926,70 @@ def replay(old: bytes, delta: Delta, sig: FileSignature | None = None) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# §6.4 内容定义分块（gear hash）—— 参考实现，边界不与被测实现保证一致（歧义 A3）
+# §6.4 内容定义分块（gear hash）
+#
+# 2026-11-09 修订后契约可独立复现：gear_table[i] = XXH64(单字节 i)（seed=0），
+# mask = (1 << mask_bits) - 1，默认 min=2048 / avg=8192 / max=32768 / mask_bits=13。
+# 因此本实现的分块边界应当与被测实现**逐块一致**（verify_deltasync 会硬断言）。
 # ---------------------------------------------------------------------------
 
 _MIN_CHUNK = 2048
 _AVG_CHUNK = 8192
 _MAX_CHUNK = 32768
+_DEFAULT_MASK_BITS = 13
 
 
-def _gear_table(seed: int = 0x5EED_1CE5) -> list[int]:
-    """design.md 未规定 gear 表；这里用固定 LCG 生成，仅用于本参考实现自洽。"""
-    table = []
-    x = seed & 0xFFFFFFFFFFFFFFFF
-    for _ in range(256):
-        x = (x * 6364136223846793005 + 1442695040888963407) & 0xFFFFFFFFFFFFFFFF
-        table.append(x)
-    return table
+def _gear_table() -> list[int]:
+    """§6.4：gear_table[i] = XXH64(单字节 i)，seed=0（由代码推导，不抄表）。"""
+    return [xxh64(bytes([i])) for i in range(256)]
 
 
 GEAR_TABLE = _gear_table()
+
+
+def cdc_chunks(
+    data: bytes,
+    min_size: int = _MIN_CHUNK,
+    avg_size: int = _AVG_CHUNK,
+    max_size: int = _MAX_CHUNK,
+    table: list[int] | None = None,
+    mask_bits: int | None = None,
+) -> list[bytes]:
+    """§6.4 gear hash 内容定义分块。
+
+        h = 0
+        for byte: h = (h << 1) + gear_table[byte]   // UInt64 自然溢出
+                  if h & mask == 0 and len >= min: 切分
+                  if len >= max: 强制切分
+    """
+    table = GEAR_TABLE if table is None else table
+    if mask_bits is None:
+        mask_bits = avg_size.bit_length() - 1
+    mask = (1 << mask_bits) - 1
+    chunks = []
+    start = 0
+    h = 0
+    for i, byte in enumerate(data):
+        h = ((h << 1) + table[byte]) & 0xFFFFFFFFFFFFFFFF
+        length = i + 1 - start
+        if length >= max_size or (length >= min_size and (h & mask) == 0):
+            chunks.append(data[start : i + 1])
+            start = i + 1
+            h = 0
+    if start < len(data):
+        chunks.append(data[start:])
+    return chunks
+
+
+def build_manifest(
+    data: bytes,
+    min_size: int = _MIN_CHUNK,
+    max_size: int = _MAX_CHUNK,
+    mask_bits: int = _DEFAULT_MASK_BITS,
+) -> Manifest:
+    chunks = cdc_chunks(data, min_size=min_size, max_size=max_size, mask_bits=mask_bits)
+    refs = [ChunkRef(sha256(c), len(c)) for c in chunks]
+    return Manifest(min_size, max_size, mask_bits, refs, manifest_root(refs))
 
 
 def cdc_chunks(

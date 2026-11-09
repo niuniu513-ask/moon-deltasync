@@ -139,11 +139,11 @@ root:u8[32]    // = SHA-256(concat(每个块的 32 字节 sha256))
 | 层 | 入口 |
 | --- | --- |
 | 签名 | `sign_bytes(input, block_size?, strong_len?) -> FileSignature`、`decode_signature`、`FileSignature::{encode, block_count, block_length, digest_hex}`、`signature_matches` |
-| delta | `compute_delta(new, signature) -> Delta`、`Delta::encode`、`decode_delta`、`apply_delta(old, delta) -> ApplyResult`、`Delta::{digest_hex, copy_ops, copied_bytes, literal_bytes}` |
+| delta | `compute_delta(new, signature) -> Delta`、`Delta::encode`、`decode_delta`、`apply_delta(old, delta) -> ApplyResult`、`Delta::{digest_hex, op_count, copy_ops, copied_blocks, copied_bytes, literal_bytes}` |
 | 工作流 | `plan_transfer(old, new, block_size?, strong_len?)`、`plan_from_signature(sig, new)`、`verified_update(old, delta_bytes)`、`TransferPlan::{delta, signature, delta_bytes, new_length, copy_ops, copied_bytes, literal_bytes, savings_ppm}` |
 | 分块 | `chunk_boundaries(input, params?)`、`chunk_manifest(input, params?)`、`ChunkManifest::{encode, verify, chunk_count, total_length, unique_chunks, root_hex}`、`decode_manifest` |
 | 块存储 | `ChunkStore::{new, ingest, assemble, unique_chunks, stored_bytes, saved_bytes}`、`ingest_snapshot(store, input, params?)` |
-| 报告 | `render_signature_json`、`render_delta_json`、`render_apply_json`、`render_chunk_json`、`render_error_json`、`render_plan_text`、`render_plan_markdown`、`ppm_text` |
+| 报告 | `render_signature_json(signature, path, content_sha256_hex, content_xxh64_hex)`、`render_delta_json`、`render_apply_json`、`render_chunk_json`、`render_error_json`、`render_plan_text`、`render_plan_markdown`、`ppm_text` |
 | 基础 | `sha256`、`sha256_hex`、`sha256_prefix`、`weak_checksum`、`WeakRoll`、`xxh64`、`hex_encode`、`hex_decode`、`constant_time_equal`、`ByteSink` |
 
 两个值得注意的类型细节：`BlockSignature.index` / `weak` 是 `Int32` / `UInt32`；`Delta` 含 `content_digest : Bytes`，`DeltaOp::Copy` 是 `Copy(Int32, Bytes)`（块号 + 该块强校验），`CopyRun(Int32, Int32, Bytes)`，`Literal(Bytes)`。
@@ -243,18 +243,27 @@ moon run cmd/main --target js -- chunk new.txt --out new.dchk
 | `moon test --target native` | **未在本机运行**：`moon build --target native` 报缺少 MSVC（`cl.exe`/`clang-cl`），由 CI 覆盖 |
 | 三个示例 | 全部实跑，输出见上文 |
 | CLI 端到端 | `sign`→`delta`→`apply` 重建结果与新文件 SHA-256 一致；`verify` 与 PowerShell `Get-FileHash` 一致 |
+| CLI `--out` 四个子命令 | 全部写出原始字节：`sign` 322 B（= `signature_bytes`）、`chunk` 190 B（= `manifest_bytes`）、`delta` 与 `apply` 同样落地，均与 JSON 内的字节数一致 |
 
 CI（`.github/workflows/ci.yml`）在 ubuntu-latest 上跑 `check`/`build`/`test --target all`，并用 `moon fmt` + `git diff --exit-code` 与 `moon info` + `git diff --exit-code` 检查格式化与接口文件是否稳定。
 
-**外部独立校验器**：`scripts/` 下的 Python 工具按 design.md 语义**独立重写**了弱校验、XXH64、三个格式的解析与 delta 重放，用来交叉验证本实现。它当前**未全绿**：`scripts/verify-report.txt` 最新一版为硬断言 429/460 通过、31 失败、3 阻塞、退出码 1。失败项**全部**是 `docs/design.md` §8.1 的示例字段名与本实现不一致造成的结构断言（例如 §8.1 的 sign 示例含 `sha256_hex`/`xxh64_hex`，实现不输出；`op_count`/`copy_blocks` 实际为 `copy_ops`/`copied_bytes`；`unique_chunks`/`dedup_ratio`/`manifest_bytes` 实际为 `new_chunks`/`reused_chunks`/`stored_bytes`/`saved_bytes`），不含算法或重建类失败（`cli-apply`、`cli-interop` 的硬断言全通过）。3 个阻塞项都源于 CLI 不导出 `DSIG`/`DCHK` 字节（即上文 `--out` 的行为）。
+**外部独立校验器**：`scripts/` 下的 Python 工具按 design.md 语义**独立重写**了弱校验、XXH64、三个格式的解析与 delta 重放，用来交叉验证本实现。它**最近一次落盘的报告早于本轮 CLI 修正**（`scripts/verify-report.txt`，2026-11-09 22:24：硬断言 429/460 通过、31 失败、3 阻塞、退出码 1），那批问题的成因都已修掉并有本机复测佐证：
 
-该报告由第三方校验器生成，是**外部佐证**，不是官方验收结论；数字随校验器与契约同步修订而变动，引用前请重跑 `python scripts/verify_deltasync.py` 取当时的值。契约与实现仍有一批需要收敛的措辞差异，集中列在 [docs/usage.md](docs/usage.md) 末尾的「待校准」一节。
+| 报告里的问题类别 | 当时的成因 | 现状 |
+| --- | --- | --- |
+| sign 结构断言失败 | 缺 `sha256_hex` / `xxh64_hex` | 已补，本机复测存在 |
+| delta 结构断言失败 | 缺 `op_count` / `copy_blocks` | 已补（同时保留 `copy_ops` / `copied_bytes`） |
+| chunk 结构断言失败 | 缺 `unique_chunks` / `dedup_ratio` / `manifest_bytes` | 已补（同时保留 `new_chunks` / `reused_chunks` / `stored_bytes` / `saved_bytes`） |
+| 3 个阻塞项 | `sign --out` / `chunk --out` 不产出字节，第三方拿不到 `DSIG` / `DCHK` | 已生效，实测写出 322 B / 190 B |
+| verify 退出码分歧 | 非法摘要也走 `ok:false` + rc=0 | 非法摘要改为 `usage` + rc=1；摘要不匹配仍是 `ok:false` + rc=0 |
+
+因此**不要引用那份报告的数字代表当前状态**——它尚未重跑。要拿到当前结论，请运行 `python scripts/verify_deltasync.py` 生成新报告。该报告是**外部佐证**，不是官方验收结论。契约与实现的对齐状态逐条列在 [docs/usage.md](docs/usage.md) §11。
 
 ## 待确认
 
 本地无法核实、因此不写成结论的事项：
 
-1. **远端仓库状态**：本机 `git` 记录显示仓库已初始化、`origin` 为 `https://github.com/niuniu513-ask/moon-deltasync.git`、`refs/heads/main` 与 `refs/remotes/origin/main` 指向同一提交（`353ae62`，reflog 14 条）。但本会话无外网，无法向 GitHub 核对远端是否可访问、CI 是否已运行，故不表述为「已推送成功」。
+1. **远端仓库状态**：本机 `git` 记录显示仓库已初始化、`origin` 为 `https://github.com/niuniu513-ask/moon-deltasync.git`，且会话读取时 `refs/heads/main` 与 `refs/remotes/origin/main` 指向同一提交（仓库仍在活跃提交，此 SHA 会变；本轮修正的 `3cda3fb`、`d54b7fb` 都在本机 reflog 里）。但本会话无外网，无法向 GitHub 核对远端可访问性与 CI 运行结果，故不表述为「已推送成功」。
 2. **mooncakes 发布状态**：该包不在 2026-10-26 的索引快照中（快照时点未发布）；当前是否已发布未核实，`moon add` 在确认前不保证可用。
 
 ## 许可证

@@ -30,6 +30,7 @@ import os
 import platform
 import random
 import shutil
+import zlib
 import subprocess
 import sys
 import tempfile
@@ -450,6 +451,19 @@ def num_close(a: float, b: float, tol: float) -> bool:
     return abs(a - b) <= tol
 
 
+def _unique_chunks_by_digest(chunks: list[bytes]) -> list[tuple[bytes, bytes]]:
+    """按首次出现顺序取「唯一块」：[(chunk_bytes, sha256), ...]。"""
+    seen: set[bytes] = set()
+    out: list[tuple[bytes, bytes]] = []
+    for chunk in chunks:
+        digest = R.sha256(chunk)
+        if digest in seen:
+            continue
+        seen.add(digest)
+        out.append((chunk, digest))
+    return out
+
+
 # ---------------------------------------------------------------------------
 # 自测（合成字节流，不依赖 CLI）
 # ---------------------------------------------------------------------------
@@ -484,15 +498,30 @@ def selftest(rec: Recorder) -> None:
     for _ in range(120):
         n = rng.randint(1, 3000)
         data = bytes(rng.randrange(256) for _ in range(n))
-        a = sum(data) % R.MOD
-        b = sum((n - i) * x for i, x in enumerate(data)) % R.MOD
+        # §6.1（修订）：a = 1 + Σw，b = n + Σ(n-i)w_i
+        a = (1 + sum(data)) % R.MOD
+        b = (n + sum((n - i) * x for i, x in enumerate(data))) % R.MOD
         expect = ((b & 0xFFFF) << 16) | (a & 0xFFFF)
         got = R.weak_checksum(data)
         if got != expect:
             ok_direct = False
             detail = f"len={n}: got {got:#010x} expect {expect:#010x}"
             break
-    rec.check(cat, "弱校验 = (b<<16)|a 按 §6.1 公式（120 个随机窗口）", ok_direct, detail)
+    rec.check(cat, "弱校验 = (b<<16)|a 按 §6.1 修订公式（120 个随机窗口）", ok_direct, detail)
+
+    # 与 zlib.adler32 完全一致（§6.1 修订后就是标准 Adler-32）：外部独立交叉验证
+    ok_zlib = True
+    detail = ""
+    for _ in range(120):
+        n = rng.randint(0, 5000)
+        data = bytes(rng.randrange(256) for _ in range(n))
+        got = R.weak_checksum(data)
+        want = zlib.adler32(data) & 0xFFFFFFFF
+        if got != want:
+            ok_zlib = False
+            detail = f"len={n}: got {got:#010x} zlib {want:#010x}"
+            break
+    rec.check(cat, "弱校验与 zlib.adler32 逐位一致（120 个随机窗口，含空窗口）", ok_zlib, detail)
 
     ok_roll = True
     detail = ""
@@ -510,7 +539,12 @@ def selftest(rec: Recorder) -> None:
             roll.roll(data[p], data[p + n])
         if not ok_roll:
             break
-    rec.check(cat, f"滑动更新 a'=a-out+in, b'=b-n*out+a' 与直接计算一致（{trials} 次滑窗）", ok_roll, detail)
+    rec.check(
+        cat,
+        f"滑动更新 a'=a-out+in, b'=b-n*out+a'-1 与直接计算一致（{trials} 次滑窗）",
+        ok_roll,
+        detail,
+    )
 
     # --- §5.1 DSIG -----------------------------------------------------
     cat = "selftest-format"
@@ -627,18 +661,26 @@ def selftest(rec: Recorder) -> None:
     mparsed = R.parse_dchk(mraw)
     rec.check(
         cat,
-        "DCHK 序列化 -> 解析 -> root 重算一致 + 长度守恒",
+        "DCHK 序列化 -> 解析 -> root 重算一致 + 长度守恒（§5.3 新布局）",
         mparsed.root == R.manifest_root(mparsed.chunks)
         and sum(c.length for c in mparsed.chunks) == len(old)
         and R.serialize_dchk(mparsed) == mraw,
-        f"{len(mparsed.chunks)} chunks, {len(mraw)} bytes",
+        f"{len(mparsed.chunks)} chunks, {len(mraw)} bytes, "
+        f"min={mparsed.min_size} max={mparsed.max_size} mask_bits={mparsed.mask_bits}",
     )
+    OFF_CNT = 4 + 1 + 4 + 4 + 1  # = 14
     dchk_bad = {
         "截断 1 字节": mraw[:-1],
         "空字节流": b"",
         "错 magic": b"DCHX" + mraw[4:],
-        "chunk_count+1": mraw[:5] + (len(mparsed.chunks) + 1).to_bytes(4, "big") + mraw[9:],
-        "chunk_count=0xFFFFFFFF": mraw[:5] + (0xFFFFFFFF).to_bytes(4, "big") + mraw[9:],
+        "版本 2": mraw[:4] + b"\x02" + mraw[5:],
+        "chunk_count+1": mraw[:OFF_CNT] + (len(mparsed.chunks) + 1).to_bytes(4, "big") + mraw[OFF_CNT + 4 :],
+        "chunk_count=0xFFFFFFFF": mraw[:OFF_CNT] + (0xFFFFFFFF).to_bytes(4, "big") + mraw[OFF_CNT + 4 :],
+        "min_size=0": mraw[:5] + (0).to_bytes(4, "big") + mraw[9:],
+        "min>max": mraw[:5] + (0x7FFFFFFF).to_bytes(4, "big") + mraw[9:],
+        "mask_bits=64": mraw[:13] + b"\x40" + mraw[14:],
+        "root 被翻转 1 字节": mraw[:-1] + bytes([mraw[-1] ^ 0xFF]),
+        "尾部多 1 字节": mraw + b"\x00",
     }
     for name, blob in dchk_bad.items():
         try:
@@ -803,7 +845,7 @@ def selftest(rec: Recorder) -> None:
     except R.ReplayError as exc:
         rec.check(cat, "规划器 -> 序列化 -> 解析 -> 重放 == new（256 KiB 插入场景）", False, exc.message)
 
-    # --- CDC 参考实现自洽（不与被测实现比较边界） ------------------------
+    # --- §6.4 CDC 独立复现（gear_table[i] = XXH64(单字节 i)，mask_bits=13） ----
     cat = "selftest-cdc"
     sample = gen_doc(rng, 1 << 20)
     chunks = R.cdc_chunks(sample)
@@ -816,12 +858,29 @@ def selftest(rec: Recorder) -> None:
         and all(len(c) >= R._MIN_CHUNK for c in chunks[:-1]),
         f"{len(chunks)} chunks, avg={len(sample)//max(1,len(chunks))}B",
     )
+    rec.check(
+        cat,
+        "gear_table[i] == XXH64(单字节 i) 且 mask_bits 默认为 13（§6.4）",
+        len(R.GEAR_TABLE) == 256 and all(R.GEAR_TABLE[i] == R.xxh64(bytes([i])) for i in range(256)),
+        f"table[0]={R.GEAR_TABLE[0]:#018x}",
+    )
+    man = R.build_manifest(sample)
+    rec.check(
+        cat,
+        "参考 manifest：chunk_count/root 由分块确定性导出，且 root == sha256(concat(块摘要))",
+        len(man.chunks) == len(chunks)
+        and [c.length for c in man.chunks] == [len(c) for c in chunks]
+        and man.root == R.manifest_root(man.chunks)
+        and R.parse_dchk(R.serialize_dchk(man)).root == man.root,
+        f"{len(man.chunks)} chunks, dchk={len(R.serialize_dchk(man))}B",
+    )
     prefixed = R.cdc_chunks(b"X" + sample)
     reuse = len(set(R.sha256(c) for c in chunks) & set(R.sha256(c) for c in prefixed))
-    rec.info(
+    rec.check(
         cat,
-        "参考 CDC 前缀插入 1 字节的指纹复用（仅参考，不与被测实现比较）",
-        f"reference reuse {reuse}/{len(chunks)}",
+        "参考 CDC 前缀插入 1 字节后 >=90% 块指纹复用（§7.5 的参考侧基线）",
+        reuse / max(1, len(chunks)) >= 0.90,
+        f"reuse {reuse}/{len(chunks)}",
     )
 
 
@@ -848,18 +907,8 @@ def cli_sign(rec: Recorder, runner: CliRunner, case: Case, tmp: Path) -> R.FileS
         cat,
         ctx,
         js,
-        (
-            "path",
-            "total_length",
-            "block_size",
-            "strong_len",
-            "block_count",
-            "sha256_hex",
-            "xxh64_hex",
-            "signature_sha256_hex",
-            "signature_bytes",
-        ),
-        {"sha256_hex": ("sha256", "file_sha256_hex"), "xxh64_hex": ("xxh64", "hash_hex")},
+        ("path", "total_length", "block_size", "strong_len", "block_count", "signature_bytes",
+         "signature_sha256_hex", "sha256_hex", "xxh64_hex"),
     )
     total_length = int_field(js, "total_length") or 0
     block_size = int_field(js, "block_size")
@@ -976,51 +1025,36 @@ def cli_sign(rec: Recorder, runner: CliRunner, case: Case, tmp: Path) -> R.FileS
             f"actual={len(raw)} expect={expect_len}",
         )
 
-    # 独立重算每个块的 weak / strong
-    # 说明（歧义 A13）：design.md §6.1 的弱校验是「a=Σw, b=Σ(n-i)w_i」无 +1/+n 的变体；
-    # 实测实现记录的是标准 Adler-32（A=1+Σw, B=Σ(n-i)w_i+n）。这里同时比对两种，并区分报告。
-    weak_doc_bad: list[str] = []
-    weak_std_hits = 0
+    # 独立重算每个块的 weak / strong（§6.1 修订后 = 标准 Adler-32；§6.2 块级强校验）
+    weak_bad: list[str] = []
     strong_bad: list[str] = []
+    weak_zlib_hits = 0
     for b in sig.blocks:
         chunk = case.old[b.index * sig.block_size : (b.index + 1) * sig.block_size]
         if b.weak != R.weak_checksum(chunk):
-            weak_doc_bad.append(
-                f"block {b.index} 记录 {b.weak:#010x}，§6.1 变体应为 {R.weak_checksum(chunk):#010x}"
+            weak_bad.append(
+                f"block {b.index} 记录 {b.weak:#010x}，独立计算 {R.weak_checksum(chunk):#010x}"
             )
-        if b.weak == R.weak_checksum_standard(chunk):
-            weak_std_hits += 1
+        if b.weak == (zlib.adler32(chunk) & 0xFFFFFFFF):
+            weak_zlib_hits += 1
         if b.strong != R.sha256(chunk)[: sig.strong_len]:
             strong_bad.append(
                 f"block {b.index} strong {b.strong.hex()} != {R.sha256(chunk)[: sig.strong_len].hex()}"
             )
-        if len(weak_doc_bad) > 4 and len(strong_bad) > 4:
+        if len(weak_bad) > 4 and len(strong_bad) > 4:
             break
     rec.check(
         cat,
-        f"{ctx}: 每块 strong 与独立实现逐块一致（{len(sig.blocks)} 块）",
+        f"{ctx}: 每块 strong 与独立实现逐块一致（{len(sig.blocks)} 块，§6.2）",
         not strong_bad,
         "; ".join(strong_bad[:4]),
     )
-    weak_doc_ok = not weak_doc_bad
     rec.check(
         cat,
-        f"{ctx}: 每块 weak 与 §6.1 变体公式一致（{len(sig.blocks)} 块）",
-        weak_doc_ok,
-        (
-            f"{'; '.join(weak_doc_bad[:3])} | 其中 {weak_std_hits}/{len(sig.blocks)} 块正好等于"
-            "**标准 Adler-32**（A=1+Σw, B=Σ(n-i)w_i+n）：实现与 §6.1 差 +1/+n（歧义 A13）"
-            if not weak_doc_ok
-            else ""
-        ),
+        f"{ctx}: 每块 weak 与 §6.1 公式逐块一致（{len(sig.blocks)} 块）",
+        not weak_bad,
+        "; ".join(weak_bad[:3]) + (f" | zlib.adler32 命中 {weak_zlib_hits}/{len(sig.blocks)}" if weak_bad else ""),
     )
-    if not weak_doc_ok and weak_std_hits != len(sig.blocks):
-        rec.check(
-            cat,
-            f"{ctx}: weak 既不是 §6.1 变体也不是标准 Adler-32（需人工核对）",
-            False,
-            f"标准命中 {weak_std_hits}/{len(sig.blocks)}",
-        )
     return sig
 
 
@@ -1073,15 +1107,15 @@ def cli_delta(rec: Recorder, runner: CliRunner, case: Case, tmp: Path, sig: R.Fi
         cat,
         ctx,
         js,
-        ("old", "new", "new_length", "op_count", "copy_blocks", "literal_bytes", "delta_bytes", "delta_sha256_hex", "savings_ratio"),
-        {"op_count": ("copy_ops", "ops", "op_total"), "copy_blocks": ("copied_blocks",), "delta_bytes": ("delta_size",)},
+        ("old", "new", "new_length", "op_count", "copy_ops", "copy_blocks", "copied_bytes",
+         "literal_bytes", "delta_bytes", "delta_sha256_hex", "savings_ratio"),
     )
-    extra = [k for k in ("copied_bytes", "copy_ops") if k in js]
+    extra = [k for k in js if k not in ("kind", "old", "new", "new_length", "op_count", "copy_ops", "copy_blocks", "copied_bytes", "literal_bytes", "delta_bytes", "delta_sha256_hex", "savings_ratio")]
     if extra:
         rec.info(
             cat,
             f"{ctx}: delta JSON 额外字段",
-            f"实现另外输出了 {extra}（§8.1 未列；额外字段不破坏契约，但外部脚本按固定字段解析）",
+            f"实现另外输出了 {extra}（§8.1 允许追加额外字段）",
         )
     rec.check(cat, f"{ctx}: DDLT 可被独立解析器解析（头/op 自洽）", True, f"{len(raw)} bytes, {len(delta.ops)} ops, bs={delta.block_size}, sl={delta.strong_len}")
     rec.check(cat, f"{ctx}: DDLT 头 new_length == len(new)", delta.new_length == len(case.new), f"{delta.new_length} vs {len(case.new)}")
@@ -1103,28 +1137,33 @@ def cli_delta(rec: Recorder, runner: CliRunner, case: Case, tmp: Path, sig: R.Fi
         rec.check(cat, f"{ctx}: JSON delta_bytes == DDLT 实际字节数", delta_bytes == len(raw), f"{delta_bytes} vs {len(raw)}")
     if delta_sha is not None:
         rec.check(cat, f"{ctx}: delta_sha256_hex == sha256(DDLT 文件)", delta_sha == R.sha256_hex(raw), f"{delta_sha} vs {R.sha256_hex(raw)}")
-    # 实现额外输出的统计量也用独立真值核对（若存在）
+    # §8.1 已把 copy_ops / copied_bytes 列入契约字段，按独立真值硬断言
     copy_op_count = sum(1 for op in delta.ops if op[0] in ("copy", "copy_run"))
-    if "copy_ops" in js and isinstance(js["copy_ops"], int):
+    copy_ops_field = int_field(js, "copy_ops")
+    if copy_ops_field is not None:
         rec.check(
             cat,
-            f"{ctx}: 额外字段 copy_ops == 解析出的 COPY/COPY_RUN op 数",
-            js["copy_ops"] == copy_op_count,
-            f"json={js['copy_ops']} 独立解析={copy_op_count}",
-            "advisory",
+            f"{ctx}: copy_ops == 解析出的 COPY/COPY_RUN op 数",
+            copy_ops_field == copy_op_count,
+            f"json={copy_ops_field} 独立解析={copy_op_count}",
         )
-    if "copied_bytes" in js and isinstance(js["copied_bytes"], int):
-        copied = sum(
-            len(case.old[op[1] * delta.block_size : (op[1] + (op[2] if op[0] == "copy_run" else 1)) * delta.block_size])
-            for op in delta.ops
-            if op[0] in ("copy", "copy_run")
-        )
+    copied_field = int_field(js, "copied_bytes")
+    if copied_field is not None:
+        copied = 0
+        for op in delta.ops:
+            if op[0] == "copy":
+                copied += len(case.old[op[1] * delta.block_size : (op[1] + 1) * delta.block_size])
+            elif op[0] == "copy_run":
+                copied += len(
+                    case.old[
+                        op[1] * delta.block_size : (op[1] + op[2]) * delta.block_size
+                    ]
+                )
         rec.check(
             cat,
-            f"{ctx}: 额外字段 copied_bytes == COPY 覆盖字节数",
-            js["copied_bytes"] == copied,
-            f"json={js['copied_bytes']} 独立计算={copied}",
-            "advisory",
+            f"{ctx}: copied_bytes == COPY/COPY_RUN 覆盖的旧数据字节数",
+            copied_field == copied,
+            f"json={copied_field} 独立计算={copied}",
         )
     violations = R.normalization_violations(delta.ops)
     rec.check(cat, f"{ctx}: DDLT 满足 §5.2 规范化（相邻同类 op 已合并）", not violations, "; ".join(violations[:4]))
@@ -1256,14 +1295,20 @@ def cli_apply(rec: Recorder, runner: CliRunner, case: Case, tmp: Path, delta: R.
         return
     rebuilt = rebuilt_path.read_bytes()
     rec.check(cat, f"{ctx}: apply 重建结果与 new 逐字节相同", rebuilt == case.new, f"rebuilt {len(rebuilt)}B vs new {len(case.new)}B")
-    blocks_verified = must_int(js, "blocks_verified", rec, cat, f"{ctx}: apply")
+    blocks_verified = int_field(js, "blocks_verified")
     copy_blocks = delta.copy_block_count()
     rec.check(
         cat,
-        f"{ctx}: blocks_verified 语义（=COPY 块数 {copy_blocks} 或 总块数，歧义 A7）",
-        blocks_verified is not None and blocks_verified > 0 and blocks_verified in (copy_blocks, R.ceil_div(len(case.new), max(1, delta.block_size))),
-        f"json={blocks_verified} copy_blocks={copy_blocks} new_blocks={R.ceil_div(len(case.new), max(1, delta.block_size))}",
-        "advisory",
+        f"{ctx}: blocks_verified == COPY/COPY_RUN 展开块数（{copy_blocks}，§8.1 示例）",
+        blocks_verified is not None and blocks_verified == copy_blocks,
+        f"json={blocks_verified} copy_blocks={copy_blocks}",
+    )
+    ops_applied = int_field(js, "ops_applied")
+    rec.check(
+        cat,
+        f"{ctx}: ops_applied == DDLT op 数（{len(delta.ops)}）",
+        ops_applied is not None and ops_applied == len(delta.ops),
+        f"json={ops_applied} 独立解析={len(delta.ops)}",
     )
 
 
@@ -1305,6 +1350,10 @@ def cli_chunk(rec: Recorder, runner: CliRunner, case: Case, tmp: Path) -> None:
     length = int_field(js, "length")
     chunk_count = int_field(js, "chunk_count")
     unique = int_field(js, "unique_chunks")
+    new_chunks = int_field(js, "new_chunks")
+    reused_chunks = int_field(js, "reused_chunks")
+    stored_bytes = int_field(js, "stored_bytes")
+    saved_bytes = int_field(js, "saved_bytes")
     root_hex = str_field(js, "root_hex")
     manifest_bytes = int_field(js, "manifest_bytes")
     dedup = js.get("dedup_ratio")
@@ -1313,20 +1362,9 @@ def cli_chunk(rec: Recorder, runner: CliRunner, case: Case, tmp: Path) -> None:
         cat,
         ctx,
         js,
-        ("path", "length", "chunk_count", "unique_chunks", "dedup_ratio", "root_hex", "manifest_bytes"),
-        {
-            "unique_chunks": ("new_chunks", "distinct_chunks"),
-            "dedup_ratio": ("reuse_ratio", "dedup"),
-            "manifest_bytes": ("manifest_size", "stored_bytes"),
-        },
+        ("path", "length", "chunk_count", "unique_chunks", "new_chunks", "reused_chunks",
+         "stored_bytes", "saved_bytes", "dedup_ratio", "manifest_bytes", "root_hex"),
     )
-    extra = [k for k in ("new_chunks", "reused_chunks", "stored_bytes", "saved_bytes") if k in js]
-    if extra:
-        rec.info(
-            cat,
-            f"{ctx}: chunk JSON 额外字段",
-            f"实现另外输出了 {extra}（§8.1 未列；外部脚本按固定字段解析）",
-        )
     if length is not None:
         rec.check(cat, f"{ctx}: chunk length == 文件长度", length == len(case.new), f"{length} vs {len(case.new)}")
     if unique is not None and chunk_count is not None:
@@ -1338,106 +1376,119 @@ def cli_chunk(rec: Recorder, runner: CliRunner, case: Case, tmp: Path) -> None:
         )
     ok_root = root_hex is not None and len(root_hex) == 64 and all(c in "0123456789abcdefABCDEF" for c in root_hex)
     rec.check(cat, f"{ctx}: root_hex 为 64 位十六进制", ok_root, f"{root_hex!r}")
-    if isinstance(dedup, (int, float)) and chunk_count and unique is not None:
-        expect_unique_share = unique / chunk_count
-        expect_saved_share = 1.0 - unique / chunk_count
+    if new_chunks is not None and reused_chunks is not None and chunk_count is not None:
         rec.check(
             cat,
-            f"{ctx}: dedup_ratio 与 unique/chunk_count 的关系可解释（歧义 A15）",
-            num_close(float(dedup), expect_unique_share, 1e-3) or num_close(float(dedup), expect_saved_share, 1e-3),
-            f"json={dedup} 候选：unique/chunk_count={expect_unique_share:.4f}（§8.1 示例 510/512=0.996）"
-            f" 或 1-unique/chunk_count={expect_saved_share:.4f}（实现口径）",
-            "advisory",
+            f"{ctx}: new_chunks + reused_chunks == chunk_count",
+            new_chunks + reused_chunks == chunk_count,
+            f"{new_chunks}+{reused_chunks} vs {chunk_count}",
         )
-    if manifest_bytes is not None and chunk_count is not None:
+    if dedup is not None and saved_bytes is not None and length:
         rec.check(
             cat,
-            f"{ctx}: manifest_bytes == 32*chunk_count+32（由 §8.1 示例反推）或 DCHK 全量 41+36*count（歧义 A4）",
-            manifest_bytes in (32 * chunk_count + 32, 41 + 36 * chunk_count),
-            f"json={manifest_bytes} candidates=({32*chunk_count+32}, {41+36*chunk_count})",
-            "advisory",
+            f"{ctx}: dedup_ratio == saved_bytes/length（§8.1 示例 16384/4194304=0.0039）",
+            num_close(float(dedup), saved_bytes / length, 1e-3),
+            f"json={dedup} saved={saved_bytes} length={length} expect={saved_bytes/length:.4f}",
+        )
+    if stored_bytes is not None and saved_bytes is not None and length is not None:
+        rec.check(
+            cat,
+            f"{ctx}: stored_bytes + saved_bytes == length",
+            stored_bytes + saved_bytes == length,
+            f"{stored_bytes}+{saved_bytes} vs {length}",
         )
 
-    # 尝试 --out 取 DCHK，做结构级独立校验
+    # --out 取 DCHK：§5.3 结构 + §6.4 分块边界 + §7.6 去重正确性
     dchk_path = tmp / f"{case.name}.dchk"
     if dchk_path.exists():
         dchk_path.unlink()
     res2 = runner.run(["chunk", str(new_path), "--out", str(dchk_path)])
-    if res2.returncode == 0 and dchk_path.exists():
-        raw = dchk_path.read_bytes()
-        man = None
-        try:
-            man = R.parse_dchk(raw)
-            rec.check(cat, f"{ctx}: DCHK 布局符合 §5.3（magic/version/chunk_count/u32 length）", True, f"{len(raw)} bytes")
-        except R.FormatError as exc:
-            rec.check(
-                cat,
-                f"{ctx}: DCHK 布局符合 §5.3（magic/version/chunk_count/u32 length）",
-                False,
-                f"{exc} | 文件头 {raw[:20].hex(' ')}",
-            )
-            try:
-                man = R.parse_dchk_impl(raw)
-                rec.check(
-                    cat,
-                    f"{ctx}: DCHK 实测布局可解析（扩展头 min/max/avg_bits + varint length，待回填文档，歧义 A14）",
-                    True,
-                    f"{len(raw)} bytes, header 18B, {len(man.chunks)} chunks, "
-                    f"min={man.min_chunk} max={man.max_chunk} avg=2^{man.avg_bits}",
-                    "advisory",
-                )
-            except R.FormatError as exc2:
-                rec.check(
-                    cat,
-                    f"{ctx}: DCHK 实测布局可解析（扩展头 min/max/avg_bits + varint length）",
-                    False,
-                    f"§5.3 与实测布局都解析失败：{exc2}",
-                )
-                return
-        if man is not None:
-            lo = man.min_chunk or R._MIN_CHUNK
-            hi = man.max_chunk or R._MAX_CHUNK
-            rec.check(cat, f"{ctx}: DCHK chunk_count == JSON chunk_count", len(man.chunks) == chunk_count, f"{len(man.chunks)} vs {chunk_count}")
-            total = sum(c.length for c in man.chunks)
-            rec.check(cat, f"{ctx}: DCHK 块长之和 == 文件长度", total == len(case.new), f"{total} vs {len(case.new)}")
-            rec.check(cat, f"{ctx}: DCHK root == sha256(concat(块 sha256))（§5.3 语义）", man.root == R.manifest_root(man.chunks), f"root={man.root.hex()}")
-            if root_hex:
-                rec.check(cat, f"{ctx}: DCHK root 与 JSON root_hex 一致", man.root.hex().lower() == root_hex.lower(), f"{man.root.hex()} vs {root_hex}")
-            uniq = len(set(c.digest for c in man.chunks))
-            if unique is not None:
-                rec.check(cat, f"{ctx}: DCHK 去重计数 == JSON unique_chunks", uniq == unique, f"{uniq} vs {unique}")
-            big = [c.length for c in man.chunks if c.length > hi]
-            rec.check(cat, f"{ctx}: 所有块长 <= max={hi}（§6.4 默认参数）", not big, f"越界块长 {big[:5]}")
-            small = [c.length for c in man.chunks[:-1] if c.length < lo]
-            rec.check(
-                cat,
-                f"{ctx}: 除末块外块长 >= min={lo}（§6.4 默认参数）",
-                not small,
-                f"越界块长 {small[:5]}",
-            )
-            if manifest_bytes is not None:
-                rec.check(
-                    cat,
-                    f"{ctx}: manifest_bytes == DCHK 实际字节数",
-                    manifest_bytes == len(raw),
-                    f"json={manifest_bytes} 实际={len(raw)}（§8.1 示例 16416 口径不同，歧义 A4）",
-                    "advisory",
-                )
-    else:
+    if not (res2.returncode == 0 and dchk_path.exists()):
         rec.check(
             cat,
-            f"{ctx}: chunk --out 可导出 manifest（§8 只承诺 DSIG/DDLT，DCHK 未提，歧义 A8）",
+            f"{ctx}: chunk --out 导出 DCHK（§8.1 已规定）",
             False,
-            f"{res2.brief(200)}；CLI 对不支持的 --out 静默忽略（rc=0 且不写文件），"
-            "外部无法解析 manifest 做独立 root/边界校验",
-            "advisory",
+            res2.brief(200),
         )
-        blocked_once(
-            rec,
+        return
+    raw = dchk_path.read_bytes()
+    try:
+        man = R.parse_dchk(raw)
+    except R.FormatError as exc:
+        rec.check(cat, f"{ctx}: DCHK 可被独立解析（§5.3 布局 + root 自校验）", False, f"{exc} | 头 {raw[:24].hex(' ')}")
+        return
+    rec.check(
+        cat,
+        f"{ctx}: DCHK 可被独立解析（§5.3 布局 + root 自校验）",
+        True,
+        f"{len(raw)} bytes, {len(man.chunks)} chunks, min={man.min_size} max={man.max_size} mask_bits={man.mask_bits}",
+    )
+    if manifest_bytes is not None:
+        rec.check(
             cat,
-            "DCHK manifest 的独立解析校验（依赖 manifest 导出）",
-            "chunk 不支持导出 manifest 字节：无法独立复核 DCHK 结构、root 重算、块长上下界与指纹复用率。"
-            "建议为 chunk 增加 --out <dchk>（§5.3 格式已定义）。",
+            f"{ctx}: manifest_bytes == DCHK 实际字节数",
+            manifest_bytes == len(raw),
+            f"json={manifest_bytes} 实际={len(raw)}",
+        )
+    if chunk_count is not None:
+        rec.check(cat, f"{ctx}: DCHK chunk_count == JSON chunk_count", len(man.chunks) == chunk_count, f"{len(man.chunks)} vs {chunk_count}")
+    total = sum(c.length for c in man.chunks)
+    rec.check(cat, f"{ctx}: DCHK 块长之和 == 文件长度", total == len(case.new), f"{total} vs {len(case.new)}")
+    rec.check(cat, f"{ctx}: DCHK root == sha256(concat(块 sha256))", man.root == R.manifest_root(man.chunks), f"root={man.root.hex()}")
+    if root_hex:
+        rec.check(cat, f"{ctx}: DCHK root 与 JSON root_hex 一致", man.root.hex().lower() == root_hex.lower(), f"{man.root.hex()} vs {root_hex}")
+    uniq = len(set(c.digest for c in man.chunks))
+    if unique is not None:
+        rec.check(cat, f"{ctx}: DCHK 去重计数 == JSON unique_chunks", uniq == unique, f"{uniq} vs {unique}")
+    big = [c.length for c in man.chunks if c.length > man.max_size]
+    rec.check(cat, f"{ctx}: 所有块长 <= max_size={man.max_size}（§6.4）", not big, f"越界块长 {big[:5]}")
+    small = [c.length for c in man.chunks[:-1] if c.length < man.min_size]
+    rec.check(cat, f"{ctx}: 除末块外块长 >= min_size={man.min_size}（§6.4）", not small, f"越界块长 {small[:5]}")
+
+    # §6.4 独立复现：用 gear_table[i]=XXH64(单字节 i) + manifest 里的参数重新分块，逐块比对
+    my_chunks = R.cdc_chunks(
+        case.new,
+        min_size=man.min_size,
+        max_size=man.max_size,
+        mask_bits=man.mask_bits,
+    )
+    rec.check(
+        cat,
+        f"{ctx}: §6.4 独立复现分块边界：块数一致（{len(my_chunks)} vs {len(man.chunks)}）",
+        len(my_chunks) == len(man.chunks),
+        f"my={len(my_chunks)} cli={len(man.chunks)}",
+    )
+    len_mismatch = [
+        f"#{i}: my={len(my_chunks[i])} cli={man.chunks[i].length}"
+        for i in range(min(len(my_chunks), len(man.chunks)))
+        if len(my_chunks[i]) != man.chunks[i].length
+    ]
+    rec.check(
+        cat,
+        f"{ctx}: §6.4 独立复现分块边界：逐块长度一致",
+        not len_mismatch,
+        "; ".join(len_mismatch[:5]),
+    )
+    dig_mismatch = [
+        f"#{i}: my={R.sha256(my_chunks[i]).hex()[:16]} cli={man.chunks[i].digest.hex()[:16]}"
+        for i in range(min(len(my_chunks), len(man.chunks)))
+        if R.sha256(my_chunks[i]) != man.chunks[i].digest
+    ]
+    rec.check(
+        cat,
+        f"{ctx}: §6.4 独立复现分块摘要：逐块 sha256 一致（§7.6）",
+        not dig_mismatch,
+        "; ".join(dig_mismatch[:5]),
+    )
+    if stored_bytes is not None:
+        my_stored = sum(
+            len(c) for c, d in _unique_chunks_by_digest(my_chunks)
+        )
+        rec.check(
+            cat,
+            f"{ctx}: stored_bytes == 独立计算的首现块字节数（{my_stored}）",
+            stored_bytes == my_stored,
+            f"json={stored_bytes} 独立={my_stored}",
         )
 
 
@@ -1453,22 +1504,18 @@ def cli_verify(rec: Recorder, runner: CliRunner, case: Case, tmp: Path) -> None:
         rec.check(cat, f"{ctx}: verify 回显 sha256_hex == 输入", (res.json or {}).get("sha256_hex", "").lower() == good, f"{res.json.get('sha256_hex')} vs {good}")
     bad = "00" * 32
     res = runner.run(["verify", str(new_path), bad])
-    is_error = res.returncode != 0 and (res.json or {}).get("kind") == "error"
-    is_ok_false = res.returncode == 0 and (res.json or {}).get("kind") == "verify" and (res.json or {}).get("ok") is False
-    rec.check(
-        cat,
-        f"{ctx}: verify 不匹配的合法 SHA-256 -> 明确否定（ok:false 或 error），不能假成功",
-        (is_error or is_ok_false) and not res.timed_out and not res.crash_markers(),
-        res.brief() + ("" if is_error else " | 走 verify/ok=false 分支（§8.1 只规定「参数错误」用 error JSON，"
-                                            "校验不匹配算业务结果，可接受；建议在文档中明确）"),
-        "advisory",
+    mismatch_ok = (
+        res.returncode == 0
+        and (res.json or {}).get("kind") == "verify"
+        and (res.json or {}).get("ok") is False
+        and not res.timed_out
+        and not res.crash_markers()
     )
     rec.check(
         cat,
-        f"{ctx}: verify 不匹配时的退出码语义（advisory：error→非零 或 ok=false→0 均可）",
-        is_error != is_ok_false,
+        f"{ctx}: verify 摘要合法但不匹配 -> ok:false + 退出码 0（§8.1 明确语义）",
+        mismatch_ok,
         res.brief(),
-        "advisory",
     )
 
 
