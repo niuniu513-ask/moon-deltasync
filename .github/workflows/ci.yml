@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install MoonBit
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+      - name: Toolchain version
+        run: moon version --all
+      - name: Check
+        run: moon check --deny-warn --target all
+      - name: Build
+        run: moon build --target all
+      - name: Test
+        run: moon test --deny-warn --target all
+      - name: Formatting is stable
+        run: |
+          moon fmt
+          git diff --exit-code
+      - name: Interface file is up to date
+        run: |
+          moon info
+          git diff --exit-code
