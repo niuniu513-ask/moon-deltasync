@@ -1,8 +1,8 @@
 moon-deltasync 独立第三方校验报告
 ==============================================================================
-生成时间         : 2026-11-09 22:26:40
-总耗时           : 1.6s
-运行模式         : selftest
+生成时间         : 2026-11-09 22:28:34
+总耗时           : 26.2s
+运行模式         : auto
 校验器           : scripts/verify_deltasync.py + scripts/dsref.py（纯标准库，独立实现）
 被测项目         : D:\moonbit\moon-deltasync
 契约             : D:\moonbit\moon-deltasync\docs\design.md（§5 格式 / §6 算法 / §8 CLI JSON）
@@ -14,17 +14,16 @@ node             : v25.2.1
 
 复现命令
 ------------------------------------------------------------------------------
-  D:\anaconda3\python.exe verify_deltasync.py --mode selftest
+  D:\anaconda3\python.exe verify_deltasync.py --mode auto
   （在 scripts/ 目录下运行；或从仓库根目录运行 python scripts/verify_deltasync.py）
   单条联调命令模板: D:\moonbit\_tools\moon-0.10.17\bin\moon.exe run --target js cmd/main -- sign <old> --out <old.dsig>
 
 结论
 ------------------------------------------------------------------------------
-  硬断言 : 51/51 通过，0 失败
-  建议项 : 0/0 通过（advisory，不计入失败；反映文档歧义下的实现选择）
+  硬断言 : 585/602 通过，17 失败
+  建议项 : 61/79 通过（advisory，不计入失败；反映文档歧义下的实现选择）
   阻塞项 : 0
-  退出码 : 0  (0=全通过 / 1=硬断言失败 / 2=自测通过但 CLI 联调被阻塞)
-  CLI 探测: 不可用 -> (skipped)
+  退出码 : 1  (0=全通过 / 1=硬断言失败 / 2=自测通过但 CLI 联调被阻塞)
 
 断言分类统计
 ------------------------------------------------------------------------------
@@ -35,6 +34,16 @@ node             : v25.2.1
   selftest-replay                    9/9         0/0
   selftest-planner                   5/5         0/0
   selftest-cdc                       1/1         0/0
+  cli-probe                          1/1         0/0
+  cli-sign                       171/180       10/10
+  cli-delta                      180/180       30/30
+  cli-apply                        60/60        6/10
+  cli-interop                      30/30         0/0
+  cli-chunk                        42/49        0/14
+  cli-verify                       14/14       14/14
+  cli-malformed                    29/29         1/1
+  cli-chunk-stability                0/1         0/0
+  cli-cross-backend                  7/7         0/0
 
 语料（固定种子 PRNG 20261109，写入临时目录，不提交）
 ------------------------------------------------------------------------------
@@ -49,6 +58,79 @@ node             : v25.2.1
   tiny-empty                     0         0  空 -> 空
   tiny-1                         1         1  1B -> 1B
   tiny-100                     100       120  100B 内替换 20B
+
+关键证据：delta 规模（CLI 实现 vs 本脚本独立 rsync 规划器）
+------------------------------------------------------------------------------
+  case                         new    delta  planner  delta/planner   copy  literal
+  doc-64k-insert             67584    10349    67643          0.153      7    10240
+  doc-256k-mixed            264144    26715   264203          0.101     29    26576
+  doc-1m-move              1048576    24745  1048635          0.024    125    24576
+  doc-2m-mixed             2087152    96755  2087211          0.046    243    96496
+  doc-64k-identical          65536       79    65595          0.001      8        0
+  doc-64k-allnew             65536    65595    65595          1.000      0    65536
+  doc-256k-1pct-blocks      262144     8301   262203          0.032     31     8192
+  tiny-empty                     0       54       54          1.000      0        0
+  tiny-1                         1       60       60          1.000      0        1
+  tiny-100                     120      179      179          1.000      0      120
+  等比/完全一致：4/10 个语料的 delta 字节数与独立规划器**逐字节相等**（最大比值 1.000）
+
+失败明细（硬断言）
+------------------------------------------------------------------------------
+  [FAIL][cli-sign] doc-64k-insert: 每块 weak/strong 与独立实现逐块一致（8 块）
+         block 0 weak 0xb2d01906 != 0x92d01905; block 1 weak 0x4f3017ab != 0x2f3017aa; block 2 weak 0xa9e015e6 != 0x89e015e5; block 3 weak 0x51c317aa != 0x31c317a9
+  [FAIL][cli-chunk] doc-64k-insert: DCHK（chunk --out）可被独立解析
+         DCHK payload 517 byte(s) != chunk_count*36+32 = 73760
+  [FAIL][cli-sign] doc-256k-mixed: 每块 weak/strong 与独立实现逐块一致（32 块）
+         block 0 weak 0xfd191b9c != 0xdd191b9b; block 1 weak 0xfb3e18df != 0xdb3e18de; block 2 weak 0x88a91c4d != 0x68a91c4c; block 3 weak 0x5fbe19d7 != 0x3fbe19d6
+  [FAIL][cli-chunk] doc-256k-mixed: DCHK（chunk --out）可被独立解析
+         DCHK payload 1844 byte(s) != chunk_count*36+32 = 73760
+  [FAIL][cli-sign] doc-1m-move: 每块 weak/strong 与独立实现逐块一致（128 块）
+         block 0 weak 0xaa681c8e != 0x8a681c8d; block 1 weak 0x9dfe141a != 0x7dfe1419; block 2 weak 0x8a751a55 != 0x6a751a54; block 3 weak 0x08c81932 != 0xe8b91931
+  [FAIL][cli-chunk] doc-1m-move: DCHK（chunk --out）可被独立解析
+         DCHK payload 6911 byte(s) != chunk_count*36+32 = 73760
+  [FAIL][cli-sign] doc-2m-mixed: 每块 weak/strong 与独立实现逐块一致（256 块）
+         block 0 weak 0xf016199a != 0xd0161999; block 1 weak 0x72fc1930 != 0x52fc192f; block 2 weak 0x0b1e1a1b != 0xeb0f1a1a; block 3 weak 0x2ea81969 != 0x0ea81968
+  [FAIL][cli-chunk] doc-2m-mixed: DCHK（chunk --out）可被独立解析
+         DCHK payload 13780 byte(s) != chunk_count*36+32 = 73760
+  [FAIL][cli-sign] doc-64k-identical: 每块 weak/strong 与独立实现逐块一致（8 块）
+         block 0 weak 0xbc6b1c08 != 0x9c6b1c07; block 1 weak 0xfdb71996 != 0xddb71995; block 2 weak 0x875619ed != 0x675619ec; block 3 weak 0x8c221b78 != 0x6c221b77
+  [FAIL][cli-chunk] doc-64k-identical: DCHK（chunk --out）可被独立解析
+         DCHK payload 381 byte(s) != chunk_count*36+32 = 73760
+  [FAIL][cli-sign] doc-64k-allnew: 每块 weak/strong 与独立实现逐块一致（8 块）
+         block 0 weak 0x69131536 != 0x49131535; block 1 weak 0xaf3b1a01 != 0x8f3b1a00; block 2 weak 0xc38e1824 != 0xa38e1823; block 3 weak 0x168112aa != 0xf67212a9
+  [FAIL][cli-chunk] doc-64k-allnew: DCHK（chunk --out）可被独立解析
+         DCHK payload 517 byte(s) != chunk_count*36+32 = 73760
+  [FAIL][cli-sign] doc-256k-1pct-blocks: 每块 weak/strong 与独立实现逐块一致（32 块）
+         block 0 weak 0x271a17d2 != 0x071a17d1; block 1 weak 0xc0911cb4 != 0xa0911cb3; block 2 weak 0xe7471963 != 0xc7471962; block 3 weak 0xd4a41908 != 0xb4a41907
+  [FAIL][cli-chunk] doc-256k-1pct-blocks: DCHK（chunk --out）可被独立解析
+         DCHK payload 1674 byte(s) != chunk_count*36+32 = 73760
+  [FAIL][cli-sign] tiny-1: 每块 weak/strong 与独立实现逐块一致（1 块）
+         block 0 weak 0x00420042 != 0x00410041
+  [FAIL][cli-sign] tiny-100: 每块 weak/strong 与独立实现逐块一致（1 块）
+         block 0 weak 0x95ce2648 != 0x956a2647
+  [FAIL][cli-chunk-stability] §7.5 分块稳定性：DCHK 可解析
+         DCHK payload 7183 byte(s) != chunk_count*36+32 = 73760
+
+建议项未通过（advisory，多为文档未规定的自由选择）
+------------------------------------------------------------------------------
+  [ADVISORY][cli-chunk] doc-64k-insert: dedup_ratio ≈ unique_chunks/chunk_count（±1e-3）: json=0.0 expect=1.0000（示例 dedup_ratio 精度 3 位，歧义 A6）
+  [ADVISORY][cli-chunk] doc-64k-insert: manifest_bytes == 32*chunk_count+32（由 §8.1 示例反推）或 DCHK 全量 41+36*count（歧义 A4）: json=526 candidates=(480, 545)
+  [ADVISORY][cli-chunk] doc-256k-mixed: dedup_ratio ≈ unique_chunks/chunk_count（±1e-3）: json=0.0 expect=1.0000（示例 dedup_ratio 精度 3 位，歧义 A6）
+  [ADVISORY][cli-chunk] doc-256k-mixed: manifest_bytes == 32*chunk_count+32（由 §8.1 示例反推）或 DCHK 全量 41+36*count（歧义 A4）: json=1853 candidates=(1728, 1949)
+  [ADVISORY][cli-chunk] doc-1m-move: dedup_ratio ≈ unique_chunks/chunk_count（±1e-3）: json=0.0 expect=1.0000（示例 dedup_ratio 精度 3 位，歧义 A6）
+  [ADVISORY][cli-chunk] doc-1m-move: manifest_bytes == 32*chunk_count+32（由 §8.1 示例反推）或 DCHK 全量 41+36*count（歧义 A4）: json=6920 candidates=(6496, 7313)
+  [ADVISORY][cli-chunk] doc-2m-mixed: dedup_ratio ≈ unique_chunks/chunk_count（±1e-3）: json=0.0 expect=1.0000（示例 dedup_ratio 精度 3 位，歧义 A6）
+  [ADVISORY][cli-chunk] doc-2m-mixed: manifest_bytes == 32*chunk_count+32（由 §8.1 示例反推）或 DCHK 全量 41+36*count（歧义 A4）: json=13789 candidates=(12960, 14585)
+  [ADVISORY][cli-chunk] doc-64k-identical: dedup_ratio ≈ unique_chunks/chunk_count（±1e-3）: json=0.0 expect=1.0000（示例 dedup_ratio 精度 3 位，歧义 A6）
+  [ADVISORY][cli-chunk] doc-64k-identical: manifest_bytes == 32*chunk_count+32（由 §8.1 示例反推）或 DCHK 全量 41+36*count（歧义 A4）: json=390 candidates=(352, 401)
+  [ADVISORY][cli-apply] doc-64k-allnew: blocks_verified 语义（=COPY 块数 0 或 总块数，歧义 A7）: json=0 copy_blocks=0 new_blocks=8
+  [ADVISORY][cli-chunk] doc-64k-allnew: dedup_ratio ≈ unique_chunks/chunk_count（±1e-3）: json=0.0 expect=1.0000（示例 dedup_ratio 精度 3 位，歧义 A6）
+  [ADVISORY][cli-chunk] doc-64k-allnew: manifest_bytes == 32*chunk_count+32（由 §8.1 示例反推）或 DCHK 全量 41+36*count（歧义 A4）: json=526 candidates=(480, 545)
+  [ADVISORY][cli-chunk] doc-256k-1pct-blocks: dedup_ratio ≈ unique_chunks/chunk_count（±1e-3）: json=0.0 expect=1.0000（示例 dedup_ratio 精度 3 位，歧义 A6）
+  [ADVISORY][cli-chunk] doc-256k-1pct-blocks: manifest_bytes == 32*chunk_count+32（由 §8.1 示例反推）或 DCHK 全量 41+36*count（歧义 A4）: json=1683 candidates=(1568, 1769)
+  [ADVISORY][cli-apply] tiny-empty: blocks_verified 语义（=COPY 块数 0 或 总块数，歧义 A7）: json=0 copy_blocks=0 new_blocks=0
+  [ADVISORY][cli-apply] tiny-1: blocks_verified 语义（=COPY 块数 0 或 总块数，歧义 A7）: json=0 copy_blocks=0 new_blocks=1
+  [ADVISORY][cli-apply] tiny-100: blocks_verified 语义（=COPY 块数 0 或 总块数，歧义 A7）: json=0 copy_blocks=0 new_blocks=1
 
 全部断言明细
 ------------------------------------------------------------------------------
@@ -116,6 +198,683 @@ node             : v25.2.1
   [PASS] 参考 CDC 分块可无损拼接 + 块长在 [min, max]（末块除外）  -- 174 chunks, avg=6026B
   [INFO] 参考 CDC 前缀插入 1 字节的指纹复用（仅参考，不与被测实现比较）  -- reference reuse 173/174
 
+## cli-probe
+  [PASS] CLI 可用性探测：未知命令返回 error JSON  -- 未知命令返回 error JSON，CLI 可用
+
+## cli-sign
+  [PASS] doc-64k-insert: sign 退出码 0  -- rc=0 0.14s json={"kind": "sign", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-64k-insert.old", "total_length": 65536, "block_size": 8192, "strong_len": 16, "block_count": 8, "signature_bytes": 182, "signature_sha256_hex": "584943b7c35a526db20e77af29898cc391b8064f3475ac234127b1bb2a33db95", "sha256_hex": "f6c487
+  [PASS] doc-64k-insert: sign 输出单行 JSON 且 kind=sign  -- rc=0 0.14s json={"kind": "sign", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-64k-insert.old", "total_length": 65536, "block_size": 8192, "strong_len": 16, "block_count": 8, "signature_bytes": 182, "signature_sha256_hex": "584943b7c35a526db20e77af29898cc391b8064f3475ac234127b1bb2a33db95", "sha256_hex": "f6c487
+  [PASS] doc-64k-insert: JSON 契约字段齐全（§8.1）  -- keys=['block_count', 'block_size', 'kind', 'path', 'sha256_hex', 'signature_bytes', 'signature_sha256_hex', 'strong_len', 'total_length', 'xxh64_hex']
+  [PASS] doc-64k-insert: sign total_length == len(old)  -- 65536 vs 65536
+  [PASS] doc-64k-insert: sign block_count == ceil(total_length/block_size)  -- block_count=8 block_size=8192 total=65536
+  [PASS] doc-64k-insert: sign 默认 block_size == default_block_size(len) = 8192（§4.1）  -- block_size=8192, len=65536
+  [PASS] doc-64k-insert: sign strong_len ∈ {8,16}（§4.1）  -- strong_len=16
+  [ADV-OK] doc-64k-insert: sign 默认 strong_len == 16（§8.1 示例，advisory）  -- strong_len=16
+  [PASS] doc-64k-insert: sign block_count <= 1_000_000（§4.1 上界）  -- block_count=8
+  [PASS] doc-64k-insert: sign sha256_hex 与 hashlib 一致  -- f6c487e1e450257eff389a2d8ff0cf96fff3a0e2927b7bc5e48564361c187042 vs f6c487e1e450257eff389a2d8ff0cf96fff3a0e2927b7bc5e48564361c187042
+  [PASS] doc-64k-insert: sign xxh64_hex 与独立 XXH64 一致（大端/小端任一，歧义 A5）  -- 7927a0715f2c175c vs candidates ('7927a0715f2c175c', '5c172c5f71a02779')
+  [PASS] doc-64k-insert: signature_bytes == 22 + block_count*(4+strong_len) = 182（§5.1）  -- json=182 expect=182
+  [PASS] doc-64k-insert: sign --out 写出 DSIG 文件非空  -- 182 bytes
+  [PASS] doc-64k-insert: DSIG 解析可被独立解析器完成（magic/version/长度自洽）  -- 182 bytes, 8 blocks, strong_len=16
+  [PASS] doc-64k-insert: DSIG 头与 sign JSON 一致 (block_size/strong_len/total_length/block_count)  -- dsig=(8192,16,65536,8) json=(8192,16,65536,8)
+  [PASS] doc-64k-insert: signature_sha256_hex == sha256(DSIG 文件)  -- 584943b7c35a526db20e77af29898cc391b8064f3475ac234127b1bb2a33db95 vs 584943b7c35a526db20e77af29898cc391b8064f3475ac234127b1bb2a33db95
+  [PASS] doc-64k-insert: signature_bytes == DSIG 实际字节数  -- json=182 实际=182
+  [PASS] doc-64k-insert: DSIG 字节数 == 22 + block_count*(4+strong_len) = 182（§5.1）  -- actual=182 expect=182
+  [FAIL] doc-64k-insert: 每块 weak/strong 与独立实现逐块一致（8 块）  -- block 0 weak 0xb2d01906 != 0x92d01905; block 1 weak 0x4f3017ab != 0x2f3017aa; block 2 weak 0xa9e015e6 != 0x89e015e5; block 3 weak 0x51c317aa != 0x31c317a9
+  [PASS] doc-256k-mixed: sign 退出码 0  -- rc=0 0.17s json={"kind": "sign", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-256k-mixed.old", "total_length": 262144, "block_size": 8192, "strong_len": 16, "block_count": 32, "signature_bytes": 662, "signature_sha256_hex": "7ac813bbd13482df681fe96f534c31b7c6172ab8409806f4104644d8ee52aefb", "sha256_hex": "32c8
+  [PASS] doc-256k-mixed: sign 输出单行 JSON 且 kind=sign  -- rc=0 0.17s json={"kind": "sign", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-256k-mixed.old", "total_length": 262144, "block_size": 8192, "strong_len": 16, "block_count": 32, "signature_bytes": 662, "signature_sha256_hex": "7ac813bbd13482df681fe96f534c31b7c6172ab8409806f4104644d8ee52aefb", "sha256_hex": "32c8
+  [PASS] doc-256k-mixed: JSON 契约字段齐全（§8.1）  -- keys=['block_count', 'block_size', 'kind', 'path', 'sha256_hex', 'signature_bytes', 'signature_sha256_hex', 'strong_len', 'total_length', 'xxh64_hex']
+  [PASS] doc-256k-mixed: sign total_length == len(old)  -- 262144 vs 262144
+  [PASS] doc-256k-mixed: sign block_count == ceil(total_length/block_size)  -- block_count=32 block_size=8192 total=262144
+  [PASS] doc-256k-mixed: sign 默认 block_size == default_block_size(len) = 8192（§4.1）  -- block_size=8192, len=262144
+  [PASS] doc-256k-mixed: sign strong_len ∈ {8,16}（§4.1）  -- strong_len=16
+  [ADV-OK] doc-256k-mixed: sign 默认 strong_len == 16（§8.1 示例，advisory）  -- strong_len=16
+  [PASS] doc-256k-mixed: sign block_count <= 1_000_000（§4.1 上界）  -- block_count=32
+  [PASS] doc-256k-mixed: sign sha256_hex 与 hashlib 一致  -- 32c814d3a318789fee363bb828bd37cddf81ed17a2122867ad7d7fc35b0c8547 vs 32c814d3a318789fee363bb828bd37cddf81ed17a2122867ad7d7fc35b0c8547
+  [PASS] doc-256k-mixed: sign xxh64_hex 与独立 XXH64 一致（大端/小端任一，歧义 A5）  -- 6e7f8e13e2a58be6 vs candidates ('6e7f8e13e2a58be6', 'e68ba5e2138e7f6e')
+  [PASS] doc-256k-mixed: signature_bytes == 22 + block_count*(4+strong_len) = 662（§5.1）  -- json=662 expect=662
+  [PASS] doc-256k-mixed: sign --out 写出 DSIG 文件非空  -- 662 bytes
+  [PASS] doc-256k-mixed: DSIG 解析可被独立解析器完成（magic/version/长度自洽）  -- 662 bytes, 32 blocks, strong_len=16
+  [PASS] doc-256k-mixed: DSIG 头与 sign JSON 一致 (block_size/strong_len/total_length/block_count)  -- dsig=(8192,16,262144,32) json=(8192,16,262144,32)
+  [PASS] doc-256k-mixed: signature_sha256_hex == sha256(DSIG 文件)  -- 7ac813bbd13482df681fe96f534c31b7c6172ab8409806f4104644d8ee52aefb vs 7ac813bbd13482df681fe96f534c31b7c6172ab8409806f4104644d8ee52aefb
+  [PASS] doc-256k-mixed: signature_bytes == DSIG 实际字节数  -- json=662 实际=662
+  [PASS] doc-256k-mixed: DSIG 字节数 == 22 + block_count*(4+strong_len) = 662（§5.1）  -- actual=662 expect=662
+  [FAIL] doc-256k-mixed: 每块 weak/strong 与独立实现逐块一致（32 块）  -- block 0 weak 0xfd191b9c != 0xdd191b9b; block 1 weak 0xfb3e18df != 0xdb3e18de; block 2 weak 0x88a91c4d != 0x68a91c4c; block 3 weak 0x5fbe19d7 != 0x3fbe19d6
+  [PASS] doc-1m-move: sign 退出码 0  -- rc=0 0.23s json={"kind": "sign", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-1m-move.old", "total_length": 1048576, "block_size": 8192, "strong_len": 16, "block_count": 128, "signature_bytes": 2582, "signature_sha256_hex": "a9d0d1b35ad4219bb02be7ccee2aedb6c645f59bcb4136f23c92a05f25e3a28a", "sha256_hex": "7d12
+  [PASS] doc-1m-move: sign 输出单行 JSON 且 kind=sign  -- rc=0 0.23s json={"kind": "sign", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-1m-move.old", "total_length": 1048576, "block_size": 8192, "strong_len": 16, "block_count": 128, "signature_bytes": 2582, "signature_sha256_hex": "a9d0d1b35ad4219bb02be7ccee2aedb6c645f59bcb4136f23c92a05f25e3a28a", "sha256_hex": "7d12
+  [PASS] doc-1m-move: JSON 契约字段齐全（§8.1）  -- keys=['block_count', 'block_size', 'kind', 'path', 'sha256_hex', 'signature_bytes', 'signature_sha256_hex', 'strong_len', 'total_length', 'xxh64_hex']
+  [PASS] doc-1m-move: sign total_length == len(old)  -- 1048576 vs 1048576
+  [PASS] doc-1m-move: sign block_count == ceil(total_length/block_size)  -- block_count=128 block_size=8192 total=1048576
+  [PASS] doc-1m-move: sign 默认 block_size == default_block_size(len) = 8192（§4.1）  -- block_size=8192, len=1048576
+  [PASS] doc-1m-move: sign strong_len ∈ {8,16}（§4.1）  -- strong_len=16
+  [ADV-OK] doc-1m-move: sign 默认 strong_len == 16（§8.1 示例，advisory）  -- strong_len=16
+  [PASS] doc-1m-move: sign block_count <= 1_000_000（§4.1 上界）  -- block_count=128
+  [PASS] doc-1m-move: sign sha256_hex 与 hashlib 一致  -- 7d12790db22fc326a28880861fe6758c3cc575a13fda0a10c75804e5433f99e9 vs 7d12790db22fc326a28880861fe6758c3cc575a13fda0a10c75804e5433f99e9
+  [PASS] doc-1m-move: sign xxh64_hex 与独立 XXH64 一致（大端/小端任一，歧义 A5）  -- d103a3f11a68d96e vs candidates ('d103a3f11a68d96e', '6ed9681af1a303d1')
+  [PASS] doc-1m-move: signature_bytes == 22 + block_count*(4+strong_len) = 2582（§5.1）  -- json=2582 expect=2582
+  [PASS] doc-1m-move: sign --out 写出 DSIG 文件非空  -- 2582 bytes
+  [PASS] doc-1m-move: DSIG 解析可被独立解析器完成（magic/version/长度自洽）  -- 2582 bytes, 128 blocks, strong_len=16
+  [PASS] doc-1m-move: DSIG 头与 sign JSON 一致 (block_size/strong_len/total_length/block_count)  -- dsig=(8192,16,1048576,128) json=(8192,16,1048576,128)
+  [PASS] doc-1m-move: signature_sha256_hex == sha256(DSIG 文件)  -- a9d0d1b35ad4219bb02be7ccee2aedb6c645f59bcb4136f23c92a05f25e3a28a vs a9d0d1b35ad4219bb02be7ccee2aedb6c645f59bcb4136f23c92a05f25e3a28a
+  [PASS] doc-1m-move: signature_bytes == DSIG 实际字节数  -- json=2582 实际=2582
+  [PASS] doc-1m-move: DSIG 字节数 == 22 + block_count*(4+strong_len) = 2582（§5.1）  -- actual=2582 expect=2582
+  [FAIL] doc-1m-move: 每块 weak/strong 与独立实现逐块一致（128 块）  -- block 0 weak 0xaa681c8e != 0x8a681c8d; block 1 weak 0x9dfe141a != 0x7dfe1419; block 2 weak 0x8a751a55 != 0x6a751a54; block 3 weak 0x08c81932 != 0xe8b91931
+  [PASS] doc-2m-mixed: sign 退出码 0  -- rc=0 0.38s json={"kind": "sign", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-2m-mixed.old", "total_length": 2097152, "block_size": 8192, "strong_len": 16, "block_count": 256, "signature_bytes": 5142, "signature_sha256_hex": "81a7968d01d8ec68111d2bdc01e63ae71b2cdcdde96c0ef3d6a5014a5d8af43d", "sha256_hex": "40b
+  [PASS] doc-2m-mixed: sign 输出单行 JSON 且 kind=sign  -- rc=0 0.38s json={"kind": "sign", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-2m-mixed.old", "total_length": 2097152, "block_size": 8192, "strong_len": 16, "block_count": 256, "signature_bytes": 5142, "signature_sha256_hex": "81a7968d01d8ec68111d2bdc01e63ae71b2cdcdde96c0ef3d6a5014a5d8af43d", "sha256_hex": "40b
+  [PASS] doc-2m-mixed: JSON 契约字段齐全（§8.1）  -- keys=['block_count', 'block_size', 'kind', 'path', 'sha256_hex', 'signature_bytes', 'signature_sha256_hex', 'strong_len', 'total_length', 'xxh64_hex']
+  [PASS] doc-2m-mixed: sign total_length == len(old)  -- 2097152 vs 2097152
+  [PASS] doc-2m-mixed: sign block_count == ceil(total_length/block_size)  -- block_count=256 block_size=8192 total=2097152
+  [PASS] doc-2m-mixed: sign 默认 block_size == default_block_size(len) = 8192（§4.1）  -- block_size=8192, len=2097152
+  [PASS] doc-2m-mixed: sign strong_len ∈ {8,16}（§4.1）  -- strong_len=16
+  [ADV-OK] doc-2m-mixed: sign 默认 strong_len == 16（§8.1 示例，advisory）  -- strong_len=16
+  [PASS] doc-2m-mixed: sign block_count <= 1_000_000（§4.1 上界）  -- block_count=256
+  [PASS] doc-2m-mixed: sign sha256_hex 与 hashlib 一致  -- 40b0c1e1bbd29cab1d8b444559d60ce493c53de9e1d812c0f61032ef0f1b32f9 vs 40b0c1e1bbd29cab1d8b444559d60ce493c53de9e1d812c0f61032ef0f1b32f9
+  [PASS] doc-2m-mixed: sign xxh64_hex 与独立 XXH64 一致（大端/小端任一，歧义 A5）  -- b8c65150d0c04da3 vs candidates ('b8c65150d0c04da3', 'a34dc0d05051c6b8')
+  [PASS] doc-2m-mixed: signature_bytes == 22 + block_count*(4+strong_len) = 5142（§5.1）  -- json=5142 expect=5142
+  [PASS] doc-2m-mixed: sign --out 写出 DSIG 文件非空  -- 5142 bytes
+  [PASS] doc-2m-mixed: DSIG 解析可被独立解析器完成（magic/version/长度自洽）  -- 5142 bytes, 256 blocks, strong_len=16
+  [PASS] doc-2m-mixed: DSIG 头与 sign JSON 一致 (block_size/strong_len/total_length/block_count)  -- dsig=(8192,16,2097152,256) json=(8192,16,2097152,256)
+  [PASS] doc-2m-mixed: signature_sha256_hex == sha256(DSIG 文件)  -- 81a7968d01d8ec68111d2bdc01e63ae71b2cdcdde96c0ef3d6a5014a5d8af43d vs 81a7968d01d8ec68111d2bdc01e63ae71b2cdcdde96c0ef3d6a5014a5d8af43d
+  [PASS] doc-2m-mixed: signature_bytes == DSIG 实际字节数  -- json=5142 实际=5142
+  [PASS] doc-2m-mixed: DSIG 字节数 == 22 + block_count*(4+strong_len) = 5142（§5.1）  -- actual=5142 expect=5142
+  [FAIL] doc-2m-mixed: 每块 weak/strong 与独立实现逐块一致（256 块）  -- block 0 weak 0xf016199a != 0xd0161999; block 1 weak 0x72fc1930 != 0x52fc192f; block 2 weak 0x0b1e1a1b != 0xeb0f1a1a; block 3 weak 0x2ea81969 != 0x0ea81968
+  [PASS] doc-64k-identical: sign 退出码 0  -- rc=0 0.15s json={"kind": "sign", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-64k-identical.old", "total_length": 65536, "block_size": 8192, "strong_len": 16, "block_count": 8, "signature_bytes": 182, "signature_sha256_hex": "e725f77348ad794fcb54eea2db80ac85255714917054ca7189804b6c244ef727", "sha256_hex": "117
+  [PASS] doc-64k-identical: sign 输出单行 JSON 且 kind=sign  -- rc=0 0.15s json={"kind": "sign", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-64k-identical.old", "total_length": 65536, "block_size": 8192, "strong_len": 16, "block_count": 8, "signature_bytes": 182, "signature_sha256_hex": "e725f77348ad794fcb54eea2db80ac85255714917054ca7189804b6c244ef727", "sha256_hex": "117
+  [PASS] doc-64k-identical: JSON 契约字段齐全（§8.1）  -- keys=['block_count', 'block_size', 'kind', 'path', 'sha256_hex', 'signature_bytes', 'signature_sha256_hex', 'strong_len', 'total_length', 'xxh64_hex']
+  [PASS] doc-64k-identical: sign total_length == len(old)  -- 65536 vs 65536
+  [PASS] doc-64k-identical: sign block_count == ceil(total_length/block_size)  -- block_count=8 block_size=8192 total=65536
+  [PASS] doc-64k-identical: sign 默认 block_size == default_block_size(len) = 8192（§4.1）  -- block_size=8192, len=65536
+  [PASS] doc-64k-identical: sign strong_len ∈ {8,16}（§4.1）  -- strong_len=16
+  [ADV-OK] doc-64k-identical: sign 默认 strong_len == 16（§8.1 示例，advisory）  -- strong_len=16
+  [PASS] doc-64k-identical: sign block_count <= 1_000_000（§4.1 上界）  -- block_count=8
+  [PASS] doc-64k-identical: sign sha256_hex 与 hashlib 一致  -- 11733188137912662ba6a160bf13bfb714739df487c08a0a595c410b2e7049e0 vs 11733188137912662ba6a160bf13bfb714739df487c08a0a595c410b2e7049e0
+  [PASS] doc-64k-identical: sign xxh64_hex 与独立 XXH64 一致（大端/小端任一，歧义 A5）  -- 696fc36a91941226 vs candidates ('696fc36a91941226', '261294916ac36f69')
+  [PASS] doc-64k-identical: signature_bytes == 22 + block_count*(4+strong_len) = 182（§5.1）  -- json=182 expect=182
+  [PASS] doc-64k-identical: sign --out 写出 DSIG 文件非空  -- 182 bytes
+  [PASS] doc-64k-identical: DSIG 解析可被独立解析器完成（magic/version/长度自洽）  -- 182 bytes, 8 blocks, strong_len=16
+  [PASS] doc-64k-identical: DSIG 头与 sign JSON 一致 (block_size/strong_len/total_length/block_count)  -- dsig=(8192,16,65536,8) json=(8192,16,65536,8)
+  [PASS] doc-64k-identical: signature_sha256_hex == sha256(DSIG 文件)  -- e725f77348ad794fcb54eea2db80ac85255714917054ca7189804b6c244ef727 vs e725f77348ad794fcb54eea2db80ac85255714917054ca7189804b6c244ef727
+  [PASS] doc-64k-identical: signature_bytes == DSIG 实际字节数  -- json=182 实际=182
+  [PASS] doc-64k-identical: DSIG 字节数 == 22 + block_count*(4+strong_len) = 182（§5.1）  -- actual=182 expect=182
+  [FAIL] doc-64k-identical: 每块 weak/strong 与独立实现逐块一致（8 块）  -- block 0 weak 0xbc6b1c08 != 0x9c6b1c07; block 1 weak 0xfdb71996 != 0xddb71995; block 2 weak 0x875619ed != 0x675619ec; block 3 weak 0x8c221b78 != 0x6c221b77
+  [PASS] doc-64k-allnew: sign 退出码 0  -- rc=0 0.21s json={"kind": "sign", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-64k-allnew.old", "total_length": 65536, "block_size": 8192, "strong_len": 16, "block_count": 8, "signature_bytes": 182, "signature_sha256_hex": "e87462e75053a38eda377834f6e853427a6490d49c9a6e7592f8003d12a7e0c2", "sha256_hex": "e8a7b4
+  [PASS] doc-64k-allnew: sign 输出单行 JSON 且 kind=sign  -- rc=0 0.21s json={"kind": "sign", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-64k-allnew.old", "total_length": 65536, "block_size": 8192, "strong_len": 16, "block_count": 8, "signature_bytes": 182, "signature_sha256_hex": "e87462e75053a38eda377834f6e853427a6490d49c9a6e7592f8003d12a7e0c2", "sha256_hex": "e8a7b4
+  [PASS] doc-64k-allnew: JSON 契约字段齐全（§8.1）  -- keys=['block_count', 'block_size', 'kind', 'path', 'sha256_hex', 'signature_bytes', 'signature_sha256_hex', 'strong_len', 'total_length', 'xxh64_hex']
+  [PASS] doc-64k-allnew: sign total_length == len(old)  -- 65536 vs 65536
+  [PASS] doc-64k-allnew: sign block_count == ceil(total_length/block_size)  -- block_count=8 block_size=8192 total=65536
+  [PASS] doc-64k-allnew: sign 默认 block_size == default_block_size(len) = 8192（§4.1）  -- block_size=8192, len=65536
+  [PASS] doc-64k-allnew: sign strong_len ∈ {8,16}（§4.1）  -- strong_len=16
+  [ADV-OK] doc-64k-allnew: sign 默认 strong_len == 16（§8.1 示例，advisory）  -- strong_len=16
+  [PASS] doc-64k-allnew: sign block_count <= 1_000_000（§4.1 上界）  -- block_count=8
+  [PASS] doc-64k-allnew: sign sha256_hex 与 hashlib 一致  -- e8a7b4013000ac3d4bdec99b8aedafa9e3c0dd13388ebba5be9aca9a4cfad6b5 vs e8a7b4013000ac3d4bdec99b8aedafa9e3c0dd13388ebba5be9aca9a4cfad6b5
+  [PASS] doc-64k-allnew: sign xxh64_hex 与独立 XXH64 一致（大端/小端任一，歧义 A5）  -- d1b92691f70441ba vs candidates ('d1b92691f70441ba', 'ba4104f79126b9d1')
+  [PASS] doc-64k-allnew: signature_bytes == 22 + block_count*(4+strong_len) = 182（§5.1）  -- json=182 expect=182
+  [PASS] doc-64k-allnew: sign --out 写出 DSIG 文件非空  -- 182 bytes
+  [PASS] doc-64k-allnew: DSIG 解析可被独立解析器完成（magic/version/长度自洽）  -- 182 bytes, 8 blocks, strong_len=16
+  [PASS] doc-64k-allnew: DSIG 头与 sign JSON 一致 (block_size/strong_len/total_length/block_count)  -- dsig=(8192,16,65536,8) json=(8192,16,65536,8)
+  [PASS] doc-64k-allnew: signature_sha256_hex == sha256(DSIG 文件)  -- e87462e75053a38eda377834f6e853427a6490d49c9a6e7592f8003d12a7e0c2 vs e87462e75053a38eda377834f6e853427a6490d49c9a6e7592f8003d12a7e0c2
+  [PASS] doc-64k-allnew: signature_bytes == DSIG 实际字节数  -- json=182 实际=182
+  [PASS] doc-64k-allnew: DSIG 字节数 == 22 + block_count*(4+strong_len) = 182（§5.1）  -- actual=182 expect=182
+  [FAIL] doc-64k-allnew: 每块 weak/strong 与独立实现逐块一致（8 块）  -- block 0 weak 0x69131536 != 0x49131535; block 1 weak 0xaf3b1a01 != 0x8f3b1a00; block 2 weak 0xc38e1824 != 0xa38e1823; block 3 weak 0x168112aa != 0xf67212a9
+  [PASS] doc-256k-1pct-blocks: sign 退出码 0  -- rc=0 0.16s json={"kind": "sign", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-256k-1pct-blocks.old", "total_length": 262144, "block_size": 8192, "strong_len": 16, "block_count": 32, "signature_bytes": 662, "signature_sha256_hex": "22fa21a6011428b55d42a5c27663e8ffc87802a6042d9980ef0d15b30b6fd926", "sha256_hex":
+  [PASS] doc-256k-1pct-blocks: sign 输出单行 JSON 且 kind=sign  -- rc=0 0.16s json={"kind": "sign", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-256k-1pct-blocks.old", "total_length": 262144, "block_size": 8192, "strong_len": 16, "block_count": 32, "signature_bytes": 662, "signature_sha256_hex": "22fa21a6011428b55d42a5c27663e8ffc87802a6042d9980ef0d15b30b6fd926", "sha256_hex":
+  [PASS] doc-256k-1pct-blocks: JSON 契约字段齐全（§8.1）  -- keys=['block_count', 'block_size', 'kind', 'path', 'sha256_hex', 'signature_bytes', 'signature_sha256_hex', 'strong_len', 'total_length', 'xxh64_hex']
+  [PASS] doc-256k-1pct-blocks: sign total_length == len(old)  -- 262144 vs 262144
+  [PASS] doc-256k-1pct-blocks: sign block_count == ceil(total_length/block_size)  -- block_count=32 block_size=8192 total=262144
+  [PASS] doc-256k-1pct-blocks: sign 默认 block_size == default_block_size(len) = 8192（§4.1）  -- block_size=8192, len=262144
+  [PASS] doc-256k-1pct-blocks: sign strong_len ∈ {8,16}（§4.1）  -- strong_len=16
+  [ADV-OK] doc-256k-1pct-blocks: sign 默认 strong_len == 16（§8.1 示例，advisory）  -- strong_len=16
+  [PASS] doc-256k-1pct-blocks: sign block_count <= 1_000_000（§4.1 上界）  -- block_count=32
+  [PASS] doc-256k-1pct-blocks: sign sha256_hex 与 hashlib 一致  -- 233879111d721dc1c3ba52c4f1d4f2df93491b30132d460ab7fe70d406955baa vs 233879111d721dc1c3ba52c4f1d4f2df93491b30132d460ab7fe70d406955baa
+  [PASS] doc-256k-1pct-blocks: sign xxh64_hex 与独立 XXH64 一致（大端/小端任一，歧义 A5）  -- 5a438c613bb53846 vs candidates ('5a438c613bb53846', '4638b53b618c435a')
+  [PASS] doc-256k-1pct-blocks: signature_bytes == 22 + block_count*(4+strong_len) = 662（§5.1）  -- json=662 expect=662
+  [PASS] doc-256k-1pct-blocks: sign --out 写出 DSIG 文件非空  -- 662 bytes
+  [PASS] doc-256k-1pct-blocks: DSIG 解析可被独立解析器完成（magic/version/长度自洽）  -- 662 bytes, 32 blocks, strong_len=16
+  [PASS] doc-256k-1pct-blocks: DSIG 头与 sign JSON 一致 (block_size/strong_len/total_length/block_count)  -- dsig=(8192,16,262144,32) json=(8192,16,262144,32)
+  [PASS] doc-256k-1pct-blocks: signature_sha256_hex == sha256(DSIG 文件)  -- 22fa21a6011428b55d42a5c27663e8ffc87802a6042d9980ef0d15b30b6fd926 vs 22fa21a6011428b55d42a5c27663e8ffc87802a6042d9980ef0d15b30b6fd926
+  [PASS] doc-256k-1pct-blocks: signature_bytes == DSIG 实际字节数  -- json=662 实际=662
+  [PASS] doc-256k-1pct-blocks: DSIG 字节数 == 22 + block_count*(4+strong_len) = 662（§5.1）  -- actual=662 expect=662
+  [FAIL] doc-256k-1pct-blocks: 每块 weak/strong 与独立实现逐块一致（32 块）  -- block 0 weak 0x271a17d2 != 0x071a17d1; block 1 weak 0xc0911cb4 != 0xa0911cb3; block 2 weak 0xe7471963 != 0xc7471962; block 3 weak 0xd4a41908 != 0xb4a41907
+  [PASS] tiny-empty: sign 退出码 0  -- rc=0 0.11s json={"kind": "sign", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\tiny-empty.old", "total_length": 0, "block_size": 512, "strong_len": 16, "block_count": 0, "signature_bytes": 22, "signature_sha256_hex": "4f789d0738d635b29de76fcc7400da9d022c0a264fbbc4b3e33e96e814ac4093", "sha256_hex": "e3b0c44298fc1c14
+  [PASS] tiny-empty: sign 输出单行 JSON 且 kind=sign  -- rc=0 0.11s json={"kind": "sign", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\tiny-empty.old", "total_length": 0, "block_size": 512, "strong_len": 16, "block_count": 0, "signature_bytes": 22, "signature_sha256_hex": "4f789d0738d635b29de76fcc7400da9d022c0a264fbbc4b3e33e96e814ac4093", "sha256_hex": "e3b0c44298fc1c14
+  [PASS] tiny-empty: JSON 契约字段齐全（§8.1）  -- keys=['block_count', 'block_size', 'kind', 'path', 'sha256_hex', 'signature_bytes', 'signature_sha256_hex', 'strong_len', 'total_length', 'xxh64_hex']
+  [PASS] tiny-empty: sign total_length == len(old)  -- 0 vs 0
+  [PASS] tiny-empty: sign block_count == ceil(total_length/block_size)  -- block_count=0 block_size=512 total=0
+  [PASS] tiny-empty: sign 默认 block_size == default_block_size(len) = 512（§4.1）  -- block_size=512, len=0
+  [PASS] tiny-empty: sign strong_len ∈ {8,16}（§4.1）  -- strong_len=16
+  [ADV-OK] tiny-empty: sign 默认 strong_len == 16（§8.1 示例，advisory）  -- strong_len=16
+  [PASS] tiny-empty: sign block_count <= 1_000_000（§4.1 上界）  -- block_count=0
+  [PASS] tiny-empty: sign sha256_hex 与 hashlib 一致  -- e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 vs e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  [PASS] tiny-empty: sign xxh64_hex 与独立 XXH64 一致（大端/小端任一，歧义 A5）  -- ef46db3751d8e999 vs candidates ('ef46db3751d8e999', '99e9d85137db46ef')
+  [PASS] tiny-empty: signature_bytes == 22 + block_count*(4+strong_len) = 22（§5.1）  -- json=22 expect=22
+  [PASS] tiny-empty: sign --out 写出 DSIG 文件非空  -- 22 bytes
+  [PASS] tiny-empty: DSIG 解析可被独立解析器完成（magic/version/长度自洽）  -- 22 bytes, 0 blocks, strong_len=16
+  [PASS] tiny-empty: DSIG 头与 sign JSON 一致 (block_size/strong_len/total_length/block_count)  -- dsig=(512,16,0,0) json=(512,16,0,0)
+  [PASS] tiny-empty: signature_sha256_hex == sha256(DSIG 文件)  -- 4f789d0738d635b29de76fcc7400da9d022c0a264fbbc4b3e33e96e814ac4093 vs 4f789d0738d635b29de76fcc7400da9d022c0a264fbbc4b3e33e96e814ac4093
+  [PASS] tiny-empty: signature_bytes == DSIG 实际字节数  -- json=22 实际=22
+  [PASS] tiny-empty: DSIG 字节数 == 22 + block_count*(4+strong_len) = 22（§5.1）  -- actual=22 expect=22
+  [PASS] tiny-empty: 每块 weak/strong 与独立实现逐块一致（0 块）
+  [PASS] tiny-1: sign 退出码 0  -- rc=0 0.12s json={"kind": "sign", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\tiny-1.old", "total_length": 1, "block_size": 512, "strong_len": 16, "block_count": 1, "signature_bytes": 42, "signature_sha256_hex": "362db1481e4035ec88f316408bae749840084d3d504d7e95d2dce72461f31446", "sha256_hex": "559aead08264d5795d39
+  [PASS] tiny-1: sign 输出单行 JSON 且 kind=sign  -- rc=0 0.12s json={"kind": "sign", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\tiny-1.old", "total_length": 1, "block_size": 512, "strong_len": 16, "block_count": 1, "signature_bytes": 42, "signature_sha256_hex": "362db1481e4035ec88f316408bae749840084d3d504d7e95d2dce72461f31446", "sha256_hex": "559aead08264d5795d39
+  [PASS] tiny-1: JSON 契约字段齐全（§8.1）  -- keys=['block_count', 'block_size', 'kind', 'path', 'sha256_hex', 'signature_bytes', 'signature_sha256_hex', 'strong_len', 'total_length', 'xxh64_hex']
+  [PASS] tiny-1: sign total_length == len(old)  -- 1 vs 1
+  [PASS] tiny-1: sign block_count == ceil(total_length/block_size)  -- block_count=1 block_size=512 total=1
+  [PASS] tiny-1: sign 默认 block_size == default_block_size(len) = 512（§4.1）  -- block_size=512, len=1
+  [PASS] tiny-1: sign strong_len ∈ {8,16}（§4.1）  -- strong_len=16
+  [ADV-OK] tiny-1: sign 默认 strong_len == 16（§8.1 示例，advisory）  -- strong_len=16
+  [PASS] tiny-1: sign block_count <= 1_000_000（§4.1 上界）  -- block_count=1
+  [PASS] tiny-1: sign sha256_hex 与 hashlib 一致  -- 559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd vs 559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd
+  [PASS] tiny-1: sign xxh64_hex 与独立 XXH64 一致（大端/小端任一，歧义 A5）  -- 13099d40d095b684 vs candidates ('13099d40d095b684', '84b695d0409d0913')
+  [PASS] tiny-1: signature_bytes == 22 + block_count*(4+strong_len) = 42（§5.1）  -- json=42 expect=42
+  [PASS] tiny-1: sign --out 写出 DSIG 文件非空  -- 42 bytes
+  [PASS] tiny-1: DSIG 解析可被独立解析器完成（magic/version/长度自洽）  -- 42 bytes, 1 blocks, strong_len=16
+  [PASS] tiny-1: DSIG 头与 sign JSON 一致 (block_size/strong_len/total_length/block_count)  -- dsig=(512,16,1,1) json=(512,16,1,1)
+  [PASS] tiny-1: signature_sha256_hex == sha256(DSIG 文件)  -- 362db1481e4035ec88f316408bae749840084d3d504d7e95d2dce72461f31446 vs 362db1481e4035ec88f316408bae749840084d3d504d7e95d2dce72461f31446
+  [PASS] tiny-1: signature_bytes == DSIG 实际字节数  -- json=42 实际=42
+  [PASS] tiny-1: DSIG 字节数 == 22 + block_count*(4+strong_len) = 42（§5.1）  -- actual=42 expect=42
+  [FAIL] tiny-1: 每块 weak/strong 与独立实现逐块一致（1 块）  -- block 0 weak 0x00420042 != 0x00410041
+  [PASS] tiny-100: sign 退出码 0  -- rc=0 0.13s json={"kind": "sign", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\tiny-100.old", "total_length": 100, "block_size": 512, "strong_len": 16, "block_count": 1, "signature_bytes": 42, "signature_sha256_hex": "d530f2510482a5a58c252802915a5d7afae3aa1c2b31ba04a6b77f5ae41e6a0b", "sha256_hex": "d26c0dbd3cf64ec8
+  [PASS] tiny-100: sign 输出单行 JSON 且 kind=sign  -- rc=0 0.13s json={"kind": "sign", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\tiny-100.old", "total_length": 100, "block_size": 512, "strong_len": 16, "block_count": 1, "signature_bytes": 42, "signature_sha256_hex": "d530f2510482a5a58c252802915a5d7afae3aa1c2b31ba04a6b77f5ae41e6a0b", "sha256_hex": "d26c0dbd3cf64ec8
+  [PASS] tiny-100: JSON 契约字段齐全（§8.1）  -- keys=['block_count', 'block_size', 'kind', 'path', 'sha256_hex', 'signature_bytes', 'signature_sha256_hex', 'strong_len', 'total_length', 'xxh64_hex']
+  [PASS] tiny-100: sign total_length == len(old)  -- 100 vs 100
+  [PASS] tiny-100: sign block_count == ceil(total_length/block_size)  -- block_count=1 block_size=512 total=100
+  [PASS] tiny-100: sign 默认 block_size == default_block_size(len) = 512（§4.1）  -- block_size=512, len=100
+  [PASS] tiny-100: sign strong_len ∈ {8,16}（§4.1）  -- strong_len=16
+  [ADV-OK] tiny-100: sign 默认 strong_len == 16（§8.1 示例，advisory）  -- strong_len=16
+  [PASS] tiny-100: sign block_count <= 1_000_000（§4.1 上界）  -- block_count=1
+  [PASS] tiny-100: sign sha256_hex 与 hashlib 一致  -- d26c0dbd3cf64ec8652f369f53f8846b283d2cc27552d2a100f260b9efe994cd vs d26c0dbd3cf64ec8652f369f53f8846b283d2cc27552d2a100f260b9efe994cd
+  [PASS] tiny-100: sign xxh64_hex 与独立 XXH64 一致（大端/小端任一，歧义 A5）  -- 1e204f1c5e54289a vs candidates ('1e204f1c5e54289a', '9a28545e1c4f201e')
+  [PASS] tiny-100: signature_bytes == 22 + block_count*(4+strong_len) = 42（§5.1）  -- json=42 expect=42
+  [PASS] tiny-100: sign --out 写出 DSIG 文件非空  -- 42 bytes
+  [PASS] tiny-100: DSIG 解析可被独立解析器完成（magic/version/长度自洽）  -- 42 bytes, 1 blocks, strong_len=16
+  [PASS] tiny-100: DSIG 头与 sign JSON 一致 (block_size/strong_len/total_length/block_count)  -- dsig=(512,16,100,1) json=(512,16,100,1)
+  [PASS] tiny-100: signature_sha256_hex == sha256(DSIG 文件)  -- d530f2510482a5a58c252802915a5d7afae3aa1c2b31ba04a6b77f5ae41e6a0b vs d530f2510482a5a58c252802915a5d7afae3aa1c2b31ba04a6b77f5ae41e6a0b
+  [PASS] tiny-100: signature_bytes == DSIG 实际字节数  -- json=42 实际=42
+  [PASS] tiny-100: DSIG 字节数 == 22 + block_count*(4+strong_len) = 42（§5.1）  -- actual=42 expect=42
+  [FAIL] tiny-100: 每块 weak/strong 与独立实现逐块一致（1 块）  -- block 0 weak 0x95ce2648 != 0x956a2647
+
+## cli-delta
+  [PASS] doc-64k-insert: delta 退出码 0  -- rc=0 0.18s json={"kind": "delta", "old": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-64k-insert.old", "new": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-64k-insert.new", "new_length": 67584, "op_count": 3, "copy_ops": 2, "copy_blocks": 7, "copied_bytes": 57344, "literal_bytes": 10240, "delta_bytes": 10349, "delta_sha25
+  [PASS] doc-64k-insert: delta 输出 JSON 且 kind=delta  -- rc=0 0.18s json={"kind": "delta", "old": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-64k-insert.old", "new": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-64k-insert.new", "new_length": 67584, "op_count": 3, "copy_ops": 2, "copy_blocks": 7, "copied_bytes": 57344, "literal_bytes": 10240, "delta_bytes": 10349, "delta_sha25
+  [PASS] doc-64k-insert: JSON 契约字段齐全（§8.1）  -- keys=['copied_bytes', 'copy_blocks', 'copy_ops', 'delta_bytes', 'delta_sha256_hex', 'kind', 'literal_bytes', 'new', 'new_length', 'old', 'op_count', 'savings_ratio']
+  [INFO] doc-64k-insert: delta JSON 额外字段  -- 实现另外输出了 ['copied_bytes', 'copy_ops']（§8.1 未列；额外字段不破坏契约，但外部脚本按固定字段解析）
+  [PASS] doc-64k-insert: DDLT 可被独立解析器解析（头/op 自洽）  -- 10349 bytes, 3 ops, bs=8192, sl=16
+  [PASS] doc-64k-insert: DDLT 头 new_length == len(new)  -- 67584 vs 67584
+  [PASS] doc-64k-insert: DDLT content_digest == sha256(new)（§5.2）  -- 9443596a39fd87d2b69372b1af7c1f8077a6b2f515dbc0d60433d9145239541a vs 9443596a39fd87d2b69372b1af7c1f8077a6b2f515dbc0d60433d9145239541a
+  [PASS] doc-64k-insert: JSON new_length == len(new)  -- 67584 vs 67584
+  [PASS] doc-64k-insert: JSON op_count == 解析出的 op 数  -- 3 vs 3
+  [PASS] doc-64k-insert: JSON copy_blocks == 展开后的 COPY 块数  -- 7 vs 7
+  [PASS] doc-64k-insert: JSON literal_bytes == LITERAL 字节合计  -- 10240 vs 10240
+  [PASS] doc-64k-insert: JSON delta_bytes == DDLT 实际字节数  -- 10349 vs 10349
+  [PASS] doc-64k-insert: delta_sha256_hex == sha256(DDLT 文件)  -- 52660806514f3340286eaebb18a73efce05ac28fa6a7d357445e5c57e7d35a95 vs 52660806514f3340286eaebb18a73efce05ac28fa6a7d357445e5c57e7d35a95
+  [ADV-OK] doc-64k-insert: 额外字段 copy_ops == 解析出的 COPY/COPY_RUN op 数  -- json=2 独立解析=2
+  [ADV-OK] doc-64k-insert: 额外字段 copied_bytes == COPY 覆盖字节数  -- json=57344 独立计算=57344
+  [PASS] doc-64k-insert: DDLT 满足 §5.2 规范化（相邻同类 op 已合并）
+  [PASS] doc-64k-insert: delta 每个 COPY/COPY_RUN 的强校验与独立重算一致（§5.2）
+  [PASS] doc-64k-insert: delta 的 (block_size, strong_len) 与 DSIG 一致  -- delta=(8192,16) sig=(8192,16)
+  [PASS] doc-64k-insert: 独立重放 delta 与 new 逐字节相同  -- rebuilt 67584B vs new 67584B
+  [PASS] doc-64k-insert: delta 字节数 <= 2 × 独立规划器字节数  -- actual=10349 planner=67643 (ratio 0.15)
+  [PASS] doc-64k-insert: savings_ratio == 1 - delta_bytes/new_length（±1e-4）  -- json=0.8469 expect=0.8469
+  [ADV-OK] doc-64k-insert: savings_ratio 保留 4 位小数（歧义 A6：示例 dedup_ratio 只 3 位）  -- json=0.8469
+  [INFO] doc-64k-insert: delta 规模对比  -- new=67584B delta=10349B planner=67643B copy_blocks=7 literal=10240B ops=3 cli_time=0.18s
+  [PASS] doc-256k-mixed: delta 退出码 0  -- rc=0 0.17s json={"kind": "delta", "old": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-256k-mixed.old", "new": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-256k-mixed.new", "new_length": 264144, "op_count": 5, "copy_ops": 3, "copy_blocks": 29, "copied_bytes": 237568, "literal_bytes": 26576, "delta_bytes": 26715, "delta_sh
+  [PASS] doc-256k-mixed: delta 输出 JSON 且 kind=delta  -- rc=0 0.17s json={"kind": "delta", "old": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-256k-mixed.old", "new": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-256k-mixed.new", "new_length": 264144, "op_count": 5, "copy_ops": 3, "copy_blocks": 29, "copied_bytes": 237568, "literal_bytes": 26576, "delta_bytes": 26715, "delta_sh
+  [PASS] doc-256k-mixed: JSON 契约字段齐全（§8.1）  -- keys=['copied_bytes', 'copy_blocks', 'copy_ops', 'delta_bytes', 'delta_sha256_hex', 'kind', 'literal_bytes', 'new', 'new_length', 'old', 'op_count', 'savings_ratio']
+  [INFO] doc-256k-mixed: delta JSON 额外字段  -- 实现另外输出了 ['copied_bytes', 'copy_ops']（§8.1 未列；额外字段不破坏契约，但外部脚本按固定字段解析）
+  [PASS] doc-256k-mixed: DDLT 可被独立解析器解析（头/op 自洽）  -- 26715 bytes, 5 ops, bs=8192, sl=16
+  [PASS] doc-256k-mixed: DDLT 头 new_length == len(new)  -- 264144 vs 264144
+  [PASS] doc-256k-mixed: DDLT content_digest == sha256(new)（§5.2）  -- 8448e0dbb809dbcfade5e2bf59d2e727e5cc450774a95b983d90ef508bfb5ef9 vs 8448e0dbb809dbcfade5e2bf59d2e727e5cc450774a95b983d90ef508bfb5ef9
+  [PASS] doc-256k-mixed: JSON new_length == len(new)  -- 264144 vs 264144
+  [PASS] doc-256k-mixed: JSON op_count == 解析出的 op 数  -- 5 vs 5
+  [PASS] doc-256k-mixed: JSON copy_blocks == 展开后的 COPY 块数  -- 29 vs 29
+  [PASS] doc-256k-mixed: JSON literal_bytes == LITERAL 字节合计  -- 26576 vs 26576
+  [PASS] doc-256k-mixed: JSON delta_bytes == DDLT 实际字节数  -- 26715 vs 26715
+  [PASS] doc-256k-mixed: delta_sha256_hex == sha256(DDLT 文件)  -- 00fce9c598e849a410dfe35fa7971c14a9598a189de1eba9edec4aa28c863042 vs 00fce9c598e849a410dfe35fa7971c14a9598a189de1eba9edec4aa28c863042
+  [ADV-OK] doc-256k-mixed: 额外字段 copy_ops == 解析出的 COPY/COPY_RUN op 数  -- json=3 独立解析=3
+  [ADV-OK] doc-256k-mixed: 额外字段 copied_bytes == COPY 覆盖字节数  -- json=237568 独立计算=237568
+  [PASS] doc-256k-mixed: DDLT 满足 §5.2 规范化（相邻同类 op 已合并）
+  [PASS] doc-256k-mixed: delta 每个 COPY/COPY_RUN 的强校验与独立重算一致（§5.2）
+  [PASS] doc-256k-mixed: delta 的 (block_size, strong_len) 与 DSIG 一致  -- delta=(8192,16) sig=(8192,16)
+  [PASS] doc-256k-mixed: 独立重放 delta 与 new 逐字节相同  -- rebuilt 264144B vs new 264144B
+  [PASS] doc-256k-mixed: delta 字节数 <= 2 × 独立规划器字节数  -- actual=26715 planner=264203 (ratio 0.10)
+  [PASS] doc-256k-mixed: savings_ratio == 1 - delta_bytes/new_length（±1e-4）  -- json=0.8989 expect=0.8989
+  [ADV-OK] doc-256k-mixed: savings_ratio 保留 4 位小数（歧义 A6：示例 dedup_ratio 只 3 位）  -- json=0.8989
+  [INFO] doc-256k-mixed: delta 规模对比  -- new=264144B delta=26715B planner=264203B copy_blocks=29 literal=26576B ops=5 cli_time=0.17s
+  [PASS] doc-1m-move: delta 退出码 0  -- rc=0 0.25s json={"kind": "delta", "old": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-1m-move.old", "new": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-1m-move.new", "new_length": 1048576, "op_count": 7, "copy_ops": 4, "copy_blocks": 125, "copied_bytes": 1024000, "literal_bytes": 24576, "delta_bytes": 24745, "delta_sha25
+  [PASS] doc-1m-move: delta 输出 JSON 且 kind=delta  -- rc=0 0.25s json={"kind": "delta", "old": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-1m-move.old", "new": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-1m-move.new", "new_length": 1048576, "op_count": 7, "copy_ops": 4, "copy_blocks": 125, "copied_bytes": 1024000, "literal_bytes": 24576, "delta_bytes": 24745, "delta_sha25
+  [PASS] doc-1m-move: JSON 契约字段齐全（§8.1）  -- keys=['copied_bytes', 'copy_blocks', 'copy_ops', 'delta_bytes', 'delta_sha256_hex', 'kind', 'literal_bytes', 'new', 'new_length', 'old', 'op_count', 'savings_ratio']
+  [INFO] doc-1m-move: delta JSON 额外字段  -- 实现另外输出了 ['copied_bytes', 'copy_ops']（§8.1 未列；额外字段不破坏契约，但外部脚本按固定字段解析）
+  [PASS] doc-1m-move: DDLT 可被独立解析器解析（头/op 自洽）  -- 24745 bytes, 7 ops, bs=8192, sl=16
+  [PASS] doc-1m-move: DDLT 头 new_length == len(new)  -- 1048576 vs 1048576
+  [PASS] doc-1m-move: DDLT content_digest == sha256(new)（§5.2）  -- 36798846d5ecf981c53f31ad9a901675bb368a59e43594dabeaf72f4fc7c6a52 vs 36798846d5ecf981c53f31ad9a901675bb368a59e43594dabeaf72f4fc7c6a52
+  [PASS] doc-1m-move: JSON new_length == len(new)  -- 1048576 vs 1048576
+  [PASS] doc-1m-move: JSON op_count == 解析出的 op 数  -- 7 vs 7
+  [PASS] doc-1m-move: JSON copy_blocks == 展开后的 COPY 块数  -- 125 vs 125
+  [PASS] doc-1m-move: JSON literal_bytes == LITERAL 字节合计  -- 24576 vs 24576
+  [PASS] doc-1m-move: JSON delta_bytes == DDLT 实际字节数  -- 24745 vs 24745
+  [PASS] doc-1m-move: delta_sha256_hex == sha256(DDLT 文件)  -- c6b15f1f19b2e006d788c7042db671ae902ce149ca71e0b995143601b5f2dc59 vs c6b15f1f19b2e006d788c7042db671ae902ce149ca71e0b995143601b5f2dc59
+  [ADV-OK] doc-1m-move: 额外字段 copy_ops == 解析出的 COPY/COPY_RUN op 数  -- json=4 独立解析=4
+  [ADV-OK] doc-1m-move: 额外字段 copied_bytes == COPY 覆盖字节数  -- json=1024000 独立计算=1024000
+  [PASS] doc-1m-move: DDLT 满足 §5.2 规范化（相邻同类 op 已合并）
+  [PASS] doc-1m-move: delta 每个 COPY/COPY_RUN 的强校验与独立重算一致（§5.2）
+  [PASS] doc-1m-move: delta 的 (block_size, strong_len) 与 DSIG 一致  -- delta=(8192,16) sig=(8192,16)
+  [PASS] doc-1m-move: 独立重放 delta 与 new 逐字节相同  -- rebuilt 1048576B vs new 1048576B
+  [PASS] doc-1m-move: delta 字节数 <= 2 × 独立规划器字节数  -- actual=24745 planner=1048635 (ratio 0.02)
+  [PASS] doc-1m-move: savings_ratio == 1 - delta_bytes/new_length（±1e-4）  -- json=0.9764 expect=0.9764
+  [ADV-OK] doc-1m-move: savings_ratio 保留 4 位小数（歧义 A6：示例 dedup_ratio 只 3 位）  -- json=0.9764
+  [INFO] doc-1m-move: delta 规模对比  -- new=1048576B delta=24745B planner=1048635B copy_blocks=125 literal=24576B ops=7 cli_time=0.25s
+  [PASS] doc-2m-mixed: delta 退出码 0  -- rc=0 0.39s json={"kind": "delta", "old": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-2m-mixed.old", "new": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-2m-mixed.new", "new_length": 2087152, "op_count": 13, "copy_ops": 7, "copy_blocks": 243, "copied_bytes": 1990656, "literal_bytes": 96496, "delta_bytes": 96755, "delta_sh
+  [PASS] doc-2m-mixed: delta 输出 JSON 且 kind=delta  -- rc=0 0.39s json={"kind": "delta", "old": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-2m-mixed.old", "new": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-2m-mixed.new", "new_length": 2087152, "op_count": 13, "copy_ops": 7, "copy_blocks": 243, "copied_bytes": 1990656, "literal_bytes": 96496, "delta_bytes": 96755, "delta_sh
+  [PASS] doc-2m-mixed: JSON 契约字段齐全（§8.1）  -- keys=['copied_bytes', 'copy_blocks', 'copy_ops', 'delta_bytes', 'delta_sha256_hex', 'kind', 'literal_bytes', 'new', 'new_length', 'old', 'op_count', 'savings_ratio']
+  [INFO] doc-2m-mixed: delta JSON 额外字段  -- 实现另外输出了 ['copied_bytes', 'copy_ops']（§8.1 未列；额外字段不破坏契约，但外部脚本按固定字段解析）
+  [PASS] doc-2m-mixed: DDLT 可被独立解析器解析（头/op 自洽）  -- 96755 bytes, 13 ops, bs=8192, sl=16
+  [PASS] doc-2m-mixed: DDLT 头 new_length == len(new)  -- 2087152 vs 2087152
+  [PASS] doc-2m-mixed: DDLT content_digest == sha256(new)（§5.2）  -- 30d2cd2b14c360b9bdf8c8542dabf495f3dc3c5bc001c80f407dbd41b144d57e vs 30d2cd2b14c360b9bdf8c8542dabf495f3dc3c5bc001c80f407dbd41b144d57e
+  [PASS] doc-2m-mixed: JSON new_length == len(new)  -- 2087152 vs 2087152
+  [PASS] doc-2m-mixed: JSON op_count == 解析出的 op 数  -- 13 vs 13
+  [PASS] doc-2m-mixed: JSON copy_blocks == 展开后的 COPY 块数  -- 243 vs 243
+  [PASS] doc-2m-mixed: JSON literal_bytes == LITERAL 字节合计  -- 96496 vs 96496
+  [PASS] doc-2m-mixed: JSON delta_bytes == DDLT 实际字节数  -- 96755 vs 96755
+  [PASS] doc-2m-mixed: delta_sha256_hex == sha256(DDLT 文件)  -- 13ca05f6aaf4a81e8708e76213628ad5d30f6f241d7700e39d9aecde6aabf432 vs 13ca05f6aaf4a81e8708e76213628ad5d30f6f241d7700e39d9aecde6aabf432
+  [ADV-OK] doc-2m-mixed: 额外字段 copy_ops == 解析出的 COPY/COPY_RUN op 数  -- json=7 独立解析=7
+  [ADV-OK] doc-2m-mixed: 额外字段 copied_bytes == COPY 覆盖字节数  -- json=1990656 独立计算=1990656
+  [PASS] doc-2m-mixed: DDLT 满足 §5.2 规范化（相邻同类 op 已合并）
+  [PASS] doc-2m-mixed: delta 每个 COPY/COPY_RUN 的强校验与独立重算一致（§5.2）
+  [PASS] doc-2m-mixed: delta 的 (block_size, strong_len) 与 DSIG 一致  -- delta=(8192,16) sig=(8192,16)
+  [PASS] doc-2m-mixed: 独立重放 delta 与 new 逐字节相同  -- rebuilt 2087152B vs new 2087152B
+  [PASS] doc-2m-mixed: delta 字节数 <= 2 × 独立规划器字节数  -- actual=96755 planner=2087211 (ratio 0.05)
+  [PASS] doc-2m-mixed: savings_ratio == 1 - delta_bytes/new_length（±1e-4）  -- json=0.9536 expect=0.9536
+  [ADV-OK] doc-2m-mixed: savings_ratio 保留 4 位小数（歧义 A6：示例 dedup_ratio 只 3 位）  -- json=0.9536
+  [INFO] doc-2m-mixed: delta 规模对比  -- new=2087152B delta=96755B planner=2087211B copy_blocks=243 literal=96496B ops=13 cli_time=0.39s
+  [PASS] doc-64k-identical: delta 退出码 0  -- rc=0 0.14s json={"kind": "delta", "old": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-64k-identical.old", "new": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-64k-identical.new", "new_length": 65536, "op_count": 1, "copy_ops": 1, "copy_blocks": 8, "copied_bytes": 65536, "literal_bytes": 0, "delta_bytes": 79, "delta_sha256
+  [PASS] doc-64k-identical: delta 输出 JSON 且 kind=delta  -- rc=0 0.14s json={"kind": "delta", "old": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-64k-identical.old", "new": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-64k-identical.new", "new_length": 65536, "op_count": 1, "copy_ops": 1, "copy_blocks": 8, "copied_bytes": 65536, "literal_bytes": 0, "delta_bytes": 79, "delta_sha256
+  [PASS] doc-64k-identical: JSON 契约字段齐全（§8.1）  -- keys=['copied_bytes', 'copy_blocks', 'copy_ops', 'delta_bytes', 'delta_sha256_hex', 'kind', 'literal_bytes', 'new', 'new_length', 'old', 'op_count', 'savings_ratio']
+  [INFO] doc-64k-identical: delta JSON 额外字段  -- 实现另外输出了 ['copied_bytes', 'copy_ops']（§8.1 未列；额外字段不破坏契约，但外部脚本按固定字段解析）
+  [PASS] doc-64k-identical: DDLT 可被独立解析器解析（头/op 自洽）  -- 79 bytes, 1 ops, bs=8192, sl=16
+  [PASS] doc-64k-identical: DDLT 头 new_length == len(new)  -- 65536 vs 65536
+  [PASS] doc-64k-identical: DDLT content_digest == sha256(new)（§5.2）  -- 11733188137912662ba6a160bf13bfb714739df487c08a0a595c410b2e7049e0 vs 11733188137912662ba6a160bf13bfb714739df487c08a0a595c410b2e7049e0
+  [PASS] doc-64k-identical: JSON new_length == len(new)  -- 65536 vs 65536
+  [PASS] doc-64k-identical: JSON op_count == 解析出的 op 数  -- 1 vs 1
+  [PASS] doc-64k-identical: JSON copy_blocks == 展开后的 COPY 块数  -- 8 vs 8
+  [PASS] doc-64k-identical: JSON literal_bytes == LITERAL 字节合计  -- 0 vs 0
+  [PASS] doc-64k-identical: JSON delta_bytes == DDLT 实际字节数  -- 79 vs 79
+  [PASS] doc-64k-identical: delta_sha256_hex == sha256(DDLT 文件)  -- de1c03529e15feaa4047580091738e5620bb0ff4ebb7a74878289ecddcf39595 vs de1c03529e15feaa4047580091738e5620bb0ff4ebb7a74878289ecddcf39595
+  [ADV-OK] doc-64k-identical: 额外字段 copy_ops == 解析出的 COPY/COPY_RUN op 数  -- json=1 独立解析=1
+  [ADV-OK] doc-64k-identical: 额外字段 copied_bytes == COPY 覆盖字节数  -- json=65536 独立计算=65536
+  [PASS] doc-64k-identical: DDLT 满足 §5.2 规范化（相邻同类 op 已合并）
+  [PASS] doc-64k-identical: delta 每个 COPY/COPY_RUN 的强校验与独立重算一致（§5.2）
+  [PASS] doc-64k-identical: delta 的 (block_size, strong_len) 与 DSIG 一致  -- delta=(8192,16) sig=(8192,16)
+  [PASS] doc-64k-identical: 独立重放 delta 与 new 逐字节相同  -- rebuilt 65536B vs new 65536B
+  [PASS] doc-64k-identical: delta 字节数 <= 2 × 独立规划器字节数  -- actual=79 planner=65595 (ratio 0.00)
+  [PASS] doc-64k-identical: savings_ratio == 1 - delta_bytes/new_length（±1e-4）  -- json=0.9988 expect=0.9988
+  [ADV-OK] doc-64k-identical: savings_ratio 保留 4 位小数（歧义 A6：示例 dedup_ratio 只 3 位）  -- json=0.9988
+  [ADV-OK] doc-64k-identical: 未改动数据 -> literal_bytes == 0 且 1 个 COPY_RUN  -- ops=[('copy_run', 0, 8, b'\x11s1\x88\x13y\x12f+\xa6\xa1`\xbf\x13\xbf\xb7')] literal=0
+  [INFO] doc-64k-identical: delta 规模对比  -- new=65536B delta=79B planner=65595B copy_blocks=8 literal=0B ops=1 cli_time=0.14s
+  [PASS] doc-64k-allnew: delta 退出码 0  -- rc=0 0.17s json={"kind": "delta", "old": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-64k-allnew.old", "new": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-64k-allnew.new", "new_length": 65536, "op_count": 1, "copy_ops": 0, "copy_blocks": 0, "copied_bytes": 0, "literal_bytes": 65536, "delta_bytes": 65595, "delta_sha256_he
+  [PASS] doc-64k-allnew: delta 输出 JSON 且 kind=delta  -- rc=0 0.17s json={"kind": "delta", "old": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-64k-allnew.old", "new": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-64k-allnew.new", "new_length": 65536, "op_count": 1, "copy_ops": 0, "copy_blocks": 0, "copied_bytes": 0, "literal_bytes": 65536, "delta_bytes": 65595, "delta_sha256_he
+  [PASS] doc-64k-allnew: JSON 契约字段齐全（§8.1）  -- keys=['copied_bytes', 'copy_blocks', 'copy_ops', 'delta_bytes', 'delta_sha256_hex', 'kind', 'literal_bytes', 'new', 'new_length', 'old', 'op_count', 'savings_ratio']
+  [INFO] doc-64k-allnew: delta JSON 额外字段  -- 实现另外输出了 ['copied_bytes', 'copy_ops']（§8.1 未列；额外字段不破坏契约，但外部脚本按固定字段解析）
+  [PASS] doc-64k-allnew: DDLT 可被独立解析器解析（头/op 自洽）  -- 65595 bytes, 1 ops, bs=8192, sl=16
+  [PASS] doc-64k-allnew: DDLT 头 new_length == len(new)  -- 65536 vs 65536
+  [PASS] doc-64k-allnew: DDLT content_digest == sha256(new)（§5.2）  -- 1ddb6c3be841df44c02bfdd62e17f773f37934e4bfa3f15a19fcb6eb8d294e48 vs 1ddb6c3be841df44c02bfdd62e17f773f37934e4bfa3f15a19fcb6eb8d294e48
+  [PASS] doc-64k-allnew: JSON new_length == len(new)  -- 65536 vs 65536
+  [PASS] doc-64k-allnew: JSON op_count == 解析出的 op 数  -- 1 vs 1
+  [PASS] doc-64k-allnew: JSON copy_blocks == 展开后的 COPY 块数  -- 0 vs 0
+  [PASS] doc-64k-allnew: JSON literal_bytes == LITERAL 字节合计  -- 65536 vs 65536
+  [PASS] doc-64k-allnew: JSON delta_bytes == DDLT 实际字节数  -- 65595 vs 65595
+  [PASS] doc-64k-allnew: delta_sha256_hex == sha256(DDLT 文件)  -- 344304260b0baf1f8c5a355d32068f93a1e4412cf59eca298566e78daf4dcd98 vs 344304260b0baf1f8c5a355d32068f93a1e4412cf59eca298566e78daf4dcd98
+  [ADV-OK] doc-64k-allnew: 额外字段 copy_ops == 解析出的 COPY/COPY_RUN op 数  -- json=0 独立解析=0
+  [ADV-OK] doc-64k-allnew: 额外字段 copied_bytes == COPY 覆盖字节数  -- json=0 独立计算=0
+  [PASS] doc-64k-allnew: DDLT 满足 §5.2 规范化（相邻同类 op 已合并）
+  [PASS] doc-64k-allnew: delta 每个 COPY/COPY_RUN 的强校验与独立重算一致（§5.2）
+  [PASS] doc-64k-allnew: delta 的 (block_size, strong_len) 与 DSIG 一致  -- delta=(8192,16) sig=(8192,16)
+  [PASS] doc-64k-allnew: 独立重放 delta（纯 literal）与 new 逐字节相同  -- 65536B
+  [PASS] doc-64k-allnew: delta 字节数 <= 2 × 独立规划器字节数  -- actual=65595 planner=65595 (ratio 1.00)
+  [PASS] doc-64k-allnew: savings_ratio == 1 - delta_bytes/new_length（±1e-4）  -- json=0.0 expect=0.0000
+  [ADV-OK] doc-64k-allnew: savings_ratio 保留 4 位小数（歧义 A6：示例 dedup_ratio 只 3 位）  -- json=0.0
+  [INFO] doc-64k-allnew: delta 规模对比  -- new=65536B delta=65595B planner=65595B copy_blocks=0 literal=65536B ops=1 cli_time=0.17s
+  [PASS] doc-256k-1pct-blocks: delta 退出码 0  -- rc=0 0.17s json={"kind": "delta", "old": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-256k-1pct-blocks.old", "new": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-256k-1pct-blocks.new", "new_length": 262144, "op_count": 3, "copy_ops": 2, "copy_blocks": 31, "copied_bytes": 253952, "literal_bytes": 8192, "delta_bytes": 8301,
+  [PASS] doc-256k-1pct-blocks: delta 输出 JSON 且 kind=delta  -- rc=0 0.17s json={"kind": "delta", "old": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-256k-1pct-blocks.old", "new": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-256k-1pct-blocks.new", "new_length": 262144, "op_count": 3, "copy_ops": 2, "copy_blocks": 31, "copied_bytes": 253952, "literal_bytes": 8192, "delta_bytes": 8301,
+  [PASS] doc-256k-1pct-blocks: JSON 契约字段齐全（§8.1）  -- keys=['copied_bytes', 'copy_blocks', 'copy_ops', 'delta_bytes', 'delta_sha256_hex', 'kind', 'literal_bytes', 'new', 'new_length', 'old', 'op_count', 'savings_ratio']
+  [INFO] doc-256k-1pct-blocks: delta JSON 额外字段  -- 实现另外输出了 ['copied_bytes', 'copy_ops']（§8.1 未列；额外字段不破坏契约，但外部脚本按固定字段解析）
+  [PASS] doc-256k-1pct-blocks: DDLT 可被独立解析器解析（头/op 自洽）  -- 8301 bytes, 3 ops, bs=8192, sl=16
+  [PASS] doc-256k-1pct-blocks: DDLT 头 new_length == len(new)  -- 262144 vs 262144
+  [PASS] doc-256k-1pct-blocks: DDLT content_digest == sha256(new)（§5.2）  -- 09ee3a09496e8e898703cc9878668d375e5ce8cf4c8ada83da63361d44a3c3a2 vs 09ee3a09496e8e898703cc9878668d375e5ce8cf4c8ada83da63361d44a3c3a2
+  [PASS] doc-256k-1pct-blocks: JSON new_length == len(new)  -- 262144 vs 262144
+  [PASS] doc-256k-1pct-blocks: JSON op_count == 解析出的 op 数  -- 3 vs 3
+  [PASS] doc-256k-1pct-blocks: JSON copy_blocks == 展开后的 COPY 块数  -- 31 vs 31
+  [PASS] doc-256k-1pct-blocks: JSON literal_bytes == LITERAL 字节合计  -- 8192 vs 8192
+  [PASS] doc-256k-1pct-blocks: JSON delta_bytes == DDLT 实际字节数  -- 8301 vs 8301
+  [PASS] doc-256k-1pct-blocks: delta_sha256_hex == sha256(DDLT 文件)  -- e2aa30644eb2f4c10c48f986f2cc475c34f83b947ee0fbcda115a06b71d64c25 vs e2aa30644eb2f4c10c48f986f2cc475c34f83b947ee0fbcda115a06b71d64c25
+  [ADV-OK] doc-256k-1pct-blocks: 额外字段 copy_ops == 解析出的 COPY/COPY_RUN op 数  -- json=2 独立解析=2
+  [ADV-OK] doc-256k-1pct-blocks: 额外字段 copied_bytes == COPY 覆盖字节数  -- json=253952 独立计算=253952
+  [PASS] doc-256k-1pct-blocks: DDLT 满足 §5.2 规范化（相邻同类 op 已合并）
+  [PASS] doc-256k-1pct-blocks: delta 每个 COPY/COPY_RUN 的强校验与独立重算一致（§5.2）
+  [PASS] doc-256k-1pct-blocks: delta 的 (block_size, strong_len) 与 DSIG 一致  -- delta=(8192,16) sig=(8192,16)
+  [PASS] doc-256k-1pct-blocks: 独立重放 delta 与 new 逐字节相同  -- rebuilt 262144B vs new 262144B
+  [PASS] doc-256k-1pct-blocks: delta 字节数 <= 2 × 独立规划器字节数  -- actual=8301 planner=262203 (ratio 0.03)
+  [PASS] doc-256k-1pct-blocks: savings_ratio == 1 - delta_bytes/new_length（±1e-4）  -- json=0.9683 expect=0.9683
+  [ADV-OK] doc-256k-1pct-blocks: savings_ratio 保留 4 位小数（歧义 A6：示例 dedup_ratio 只 3 位）  -- json=0.9683
+  [PASS] doc-256k-1pct-blocks: §7.3 局部性 delta_bytes <= 块数*8+改动字节+16 = 8464  -- actual=8301 bound=8464 changed=8192
+  [INFO] doc-256k-1pct-blocks: delta 规模对比  -- new=262144B delta=8301B planner=262203B copy_blocks=31 literal=8192B ops=3 cli_time=0.17s
+  [PASS] tiny-empty: delta 退出码 0  -- rc=0 0.12s json={"kind": "delta", "old": "C:\\Temp\\deltasync-verify-n65sfbap\\tiny-empty.old", "new": "C:\\Temp\\deltasync-verify-n65sfbap\\tiny-empty.new", "new_length": 0, "op_count": 0, "copy_ops": 0, "copy_blocks": 0, "copied_bytes": 0, "literal_bytes": 0, "delta_bytes": 54, "delta_sha256_hex": "dfd7d6f6cc0ec4
+  [PASS] tiny-empty: delta 输出 JSON 且 kind=delta  -- rc=0 0.12s json={"kind": "delta", "old": "C:\\Temp\\deltasync-verify-n65sfbap\\tiny-empty.old", "new": "C:\\Temp\\deltasync-verify-n65sfbap\\tiny-empty.new", "new_length": 0, "op_count": 0, "copy_ops": 0, "copy_blocks": 0, "copied_bytes": 0, "literal_bytes": 0, "delta_bytes": 54, "delta_sha256_hex": "dfd7d6f6cc0ec4
+  [PASS] tiny-empty: JSON 契约字段齐全（§8.1）  -- keys=['copied_bytes', 'copy_blocks', 'copy_ops', 'delta_bytes', 'delta_sha256_hex', 'kind', 'literal_bytes', 'new', 'new_length', 'old', 'op_count', 'savings_ratio']
+  [INFO] tiny-empty: delta JSON 额外字段  -- 实现另外输出了 ['copied_bytes', 'copy_ops']（§8.1 未列；额外字段不破坏契约，但外部脚本按固定字段解析）
+  [PASS] tiny-empty: DDLT 可被独立解析器解析（头/op 自洽）  -- 54 bytes, 0 ops, bs=512, sl=16
+  [PASS] tiny-empty: DDLT 头 new_length == len(new)  -- 0 vs 0
+  [PASS] tiny-empty: DDLT content_digest == sha256(new)（§5.2）  -- e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 vs e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  [PASS] tiny-empty: JSON new_length == len(new)  -- 0 vs 0
+  [PASS] tiny-empty: JSON op_count == 解析出的 op 数  -- 0 vs 0
+  [PASS] tiny-empty: JSON copy_blocks == 展开后的 COPY 块数  -- 0 vs 0
+  [PASS] tiny-empty: JSON literal_bytes == LITERAL 字节合计  -- 0 vs 0
+  [PASS] tiny-empty: JSON delta_bytes == DDLT 实际字节数  -- 54 vs 54
+  [PASS] tiny-empty: delta_sha256_hex == sha256(DDLT 文件)  -- dfd7d6f6cc0ec45f80dc8b16ec73a5cf29cde0e0bf8a91edd2079c4af70ca141 vs dfd7d6f6cc0ec45f80dc8b16ec73a5cf29cde0e0bf8a91edd2079c4af70ca141
+  [ADV-OK] tiny-empty: 额外字段 copy_ops == 解析出的 COPY/COPY_RUN op 数  -- json=0 独立解析=0
+  [ADV-OK] tiny-empty: 额外字段 copied_bytes == COPY 覆盖字节数  -- json=0 独立计算=0
+  [PASS] tiny-empty: DDLT 满足 §5.2 规范化（相邻同类 op 已合并）
+  [PASS] tiny-empty: delta 每个 COPY/COPY_RUN 的强校验与独立重算一致（§5.2）
+  [PASS] tiny-empty: delta 的 (block_size, strong_len) 与 DSIG 一致  -- delta=(512,16) sig=(512,16)
+  [PASS] tiny-empty: 独立重放 delta（纯 literal）与 new 逐字节相同  -- 0B
+  [PASS] tiny-empty: delta 字节数 <= 2 × 独立规划器字节数  -- actual=54 planner=54 (ratio 1.00)
+  [INFO] tiny-empty: delta 规模对比  -- new=0B delta=54B planner=54B copy_blocks=0 literal=0B ops=0 cli_time=0.12s
+  [PASS] tiny-1: delta 退出码 0  -- rc=0 0.11s json={"kind": "delta", "old": "C:\\Temp\\deltasync-verify-n65sfbap\\tiny-1.old", "new": "C:\\Temp\\deltasync-verify-n65sfbap\\tiny-1.new", "new_length": 1, "op_count": 1, "copy_ops": 0, "copy_blocks": 0, "copied_bytes": 0, "literal_bytes": 1, "delta_bytes": 60, "delta_sha256_hex": "c1e3183e4bf845951de9cf
+  [PASS] tiny-1: delta 输出 JSON 且 kind=delta  -- rc=0 0.11s json={"kind": "delta", "old": "C:\\Temp\\deltasync-verify-n65sfbap\\tiny-1.old", "new": "C:\\Temp\\deltasync-verify-n65sfbap\\tiny-1.new", "new_length": 1, "op_count": 1, "copy_ops": 0, "copy_blocks": 0, "copied_bytes": 0, "literal_bytes": 1, "delta_bytes": 60, "delta_sha256_hex": "c1e3183e4bf845951de9cf
+  [PASS] tiny-1: JSON 契约字段齐全（§8.1）  -- keys=['copied_bytes', 'copy_blocks', 'copy_ops', 'delta_bytes', 'delta_sha256_hex', 'kind', 'literal_bytes', 'new', 'new_length', 'old', 'op_count', 'savings_ratio']
+  [INFO] tiny-1: delta JSON 额外字段  -- 实现另外输出了 ['copied_bytes', 'copy_ops']（§8.1 未列；额外字段不破坏契约，但外部脚本按固定字段解析）
+  [PASS] tiny-1: DDLT 可被独立解析器解析（头/op 自洽）  -- 60 bytes, 1 ops, bs=512, sl=16
+  [PASS] tiny-1: DDLT 头 new_length == len(new)  -- 1 vs 1
+  [PASS] tiny-1: DDLT content_digest == sha256(new)（§5.2）  -- df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c vs df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c
+  [PASS] tiny-1: JSON new_length == len(new)  -- 1 vs 1
+  [PASS] tiny-1: JSON op_count == 解析出的 op 数  -- 1 vs 1
+  [PASS] tiny-1: JSON copy_blocks == 展开后的 COPY 块数  -- 0 vs 0
+  [PASS] tiny-1: JSON literal_bytes == LITERAL 字节合计  -- 1 vs 1
+  [PASS] tiny-1: JSON delta_bytes == DDLT 实际字节数  -- 60 vs 60
+  [PASS] tiny-1: delta_sha256_hex == sha256(DDLT 文件)  -- c1e3183e4bf845951de9cfac1df13bbcbdd520bdc13f53ca3fbe849c9926ab45 vs c1e3183e4bf845951de9cfac1df13bbcbdd520bdc13f53ca3fbe849c9926ab45
+  [ADV-OK] tiny-1: 额外字段 copy_ops == 解析出的 COPY/COPY_RUN op 数  -- json=0 独立解析=0
+  [ADV-OK] tiny-1: 额外字段 copied_bytes == COPY 覆盖字节数  -- json=0 独立计算=0
+  [PASS] tiny-1: DDLT 满足 §5.2 规范化（相邻同类 op 已合并）
+  [PASS] tiny-1: delta 每个 COPY/COPY_RUN 的强校验与独立重算一致（§5.2）
+  [PASS] tiny-1: delta 的 (block_size, strong_len) 与 DSIG 一致  -- delta=(512,16) sig=(512,16)
+  [PASS] tiny-1: 独立重放 delta（纯 literal）与 new 逐字节相同  -- 1B
+  [PASS] tiny-1: delta 字节数 <= 2 × 独立规划器字节数  -- actual=60 planner=60 (ratio 1.00)
+  [PASS] tiny-1: savings_ratio == 1 - delta_bytes/new_length（±1e-4）  -- json=0.0 expect=0.0000
+  [ADV-OK] tiny-1: savings_ratio 保留 4 位小数（歧义 A6：示例 dedup_ratio 只 3 位）  -- json=0.0
+  [INFO] tiny-1: delta 规模对比  -- new=1B delta=60B planner=60B copy_blocks=0 literal=1B ops=1 cli_time=0.11s
+  [PASS] tiny-100: delta 退出码 0  -- rc=0 0.12s json={"kind": "delta", "old": "C:\\Temp\\deltasync-verify-n65sfbap\\tiny-100.old", "new": "C:\\Temp\\deltasync-verify-n65sfbap\\tiny-100.new", "new_length": 120, "op_count": 1, "copy_ops": 0, "copy_blocks": 0, "copied_bytes": 0, "literal_bytes": 120, "delta_bytes": 179, "delta_sha256_hex": "5d83f322a87ee
+  [PASS] tiny-100: delta 输出 JSON 且 kind=delta  -- rc=0 0.12s json={"kind": "delta", "old": "C:\\Temp\\deltasync-verify-n65sfbap\\tiny-100.old", "new": "C:\\Temp\\deltasync-verify-n65sfbap\\tiny-100.new", "new_length": 120, "op_count": 1, "copy_ops": 0, "copy_blocks": 0, "copied_bytes": 0, "literal_bytes": 120, "delta_bytes": 179, "delta_sha256_hex": "5d83f322a87ee
+  [PASS] tiny-100: JSON 契约字段齐全（§8.1）  -- keys=['copied_bytes', 'copy_blocks', 'copy_ops', 'delta_bytes', 'delta_sha256_hex', 'kind', 'literal_bytes', 'new', 'new_length', 'old', 'op_count', 'savings_ratio']
+  [INFO] tiny-100: delta JSON 额外字段  -- 实现另外输出了 ['copied_bytes', 'copy_ops']（§8.1 未列；额外字段不破坏契约，但外部脚本按固定字段解析）
+  [PASS] tiny-100: DDLT 可被独立解析器解析（头/op 自洽）  -- 179 bytes, 1 ops, bs=512, sl=16
+  [PASS] tiny-100: DDLT 头 new_length == len(new)  -- 120 vs 120
+  [PASS] tiny-100: DDLT content_digest == sha256(new)（§5.2）  -- d340cc796733929de4a2e106385a36319a4d235cf3a3c46dc8c0c60f091dd345 vs d340cc796733929de4a2e106385a36319a4d235cf3a3c46dc8c0c60f091dd345
+  [PASS] tiny-100: JSON new_length == len(new)  -- 120 vs 120
+  [PASS] tiny-100: JSON op_count == 解析出的 op 数  -- 1 vs 1
+  [PASS] tiny-100: JSON copy_blocks == 展开后的 COPY 块数  -- 0 vs 0
+  [PASS] tiny-100: JSON literal_bytes == LITERAL 字节合计  -- 120 vs 120
+  [PASS] tiny-100: JSON delta_bytes == DDLT 实际字节数  -- 179 vs 179
+  [PASS] tiny-100: delta_sha256_hex == sha256(DDLT 文件)  -- 5d83f322a87ee1599da698cc268b8eb1983963006eaef08bac78b5a11f898b16 vs 5d83f322a87ee1599da698cc268b8eb1983963006eaef08bac78b5a11f898b16
+  [ADV-OK] tiny-100: 额外字段 copy_ops == 解析出的 COPY/COPY_RUN op 数  -- json=0 独立解析=0
+  [ADV-OK] tiny-100: 额外字段 copied_bytes == COPY 覆盖字节数  -- json=0 独立计算=0
+  [PASS] tiny-100: DDLT 满足 §5.2 规范化（相邻同类 op 已合并）
+  [PASS] tiny-100: delta 每个 COPY/COPY_RUN 的强校验与独立重算一致（§5.2）
+  [PASS] tiny-100: delta 的 (block_size, strong_len) 与 DSIG 一致  -- delta=(512,16) sig=(512,16)
+  [PASS] tiny-100: 独立重放 delta（纯 literal）与 new 逐字节相同  -- 120B
+  [PASS] tiny-100: delta 字节数 <= 2 × 独立规划器字节数  -- actual=179 planner=179 (ratio 1.00)
+  [PASS] tiny-100: savings_ratio == 1 - delta_bytes/new_length（±1e-4）  -- json=0.0 expect=0.0000
+  [ADV-OK] tiny-100: savings_ratio 保留 4 位小数（歧义 A6：示例 dedup_ratio 只 3 位）  -- json=0.0
+  [INFO] tiny-100: delta 规模对比  -- new=120B delta=179B planner=179B copy_blocks=0 literal=120B ops=1 cli_time=0.12s
+
+## cli-apply
+  [PASS] doc-64k-insert: apply 退出码 0  -- rc=0 0.18s json={"kind": "apply", "ok": true, "bytes_written": 67584, "blocks_verified": 7, "ops_applied": 3, "sha256_hex": "9443596a39fd87d2b69372b1af7c1f8077a6b2f515dbc0d60433d9145239541a"}
+  [PASS] doc-64k-insert: apply 输出 JSON 且 kind=apply  -- rc=0 0.18s json={"kind": "apply", "ok": true, "bytes_written": 67584, "blocks_verified": 7, "ops_applied": 3, "sha256_hex": "9443596a39fd87d2b69372b1af7c1f8077a6b2f515dbc0d60433d9145239541a"}
+  [PASS] doc-64k-insert: apply ok == true  -- rc=0 0.18s json={"kind": "apply", "ok": true, "bytes_written": 67584, "blocks_verified": 7, "ops_applied": 3, "sha256_hex": "9443596a39fd87d2b69372b1af7c1f8077a6b2f515dbc0d60433d9145239541a"}
+  [PASS] doc-64k-insert: apply bytes_written == len(new)  -- 67584 vs 67584
+  [PASS] doc-64k-insert: apply sha256_hex == hashlib(new)  -- 9443596a39fd87d2b69372b1af7c1f8077a6b2f515dbc0d60433d9145239541a vs 9443596a39fd87d2b69372b1af7c1f8077a6b2f515dbc0d60433d9145239541a
+  [PASS] doc-64k-insert: apply 重建结果与 new 逐字节相同  -- rebuilt 67584B vs new 67584B
+  [ADV-OK] doc-64k-insert: blocks_verified 语义（=COPY 块数 7 或 总块数，歧义 A7）  -- json=7 copy_blocks=7 new_blocks=9
+  [PASS] doc-256k-mixed: apply 退出码 0  -- rc=0 0.16s json={"kind": "apply", "ok": true, "bytes_written": 264144, "blocks_verified": 29, "ops_applied": 5, "sha256_hex": "8448e0dbb809dbcfade5e2bf59d2e727e5cc450774a95b983d90ef508bfb5ef9"}
+  [PASS] doc-256k-mixed: apply 输出 JSON 且 kind=apply  -- rc=0 0.16s json={"kind": "apply", "ok": true, "bytes_written": 264144, "blocks_verified": 29, "ops_applied": 5, "sha256_hex": "8448e0dbb809dbcfade5e2bf59d2e727e5cc450774a95b983d90ef508bfb5ef9"}
+  [PASS] doc-256k-mixed: apply ok == true  -- rc=0 0.16s json={"kind": "apply", "ok": true, "bytes_written": 264144, "blocks_verified": 29, "ops_applied": 5, "sha256_hex": "8448e0dbb809dbcfade5e2bf59d2e727e5cc450774a95b983d90ef508bfb5ef9"}
+  [PASS] doc-256k-mixed: apply bytes_written == len(new)  -- 264144 vs 264144
+  [PASS] doc-256k-mixed: apply sha256_hex == hashlib(new)  -- 8448e0dbb809dbcfade5e2bf59d2e727e5cc450774a95b983d90ef508bfb5ef9 vs 8448e0dbb809dbcfade5e2bf59d2e727e5cc450774a95b983d90ef508bfb5ef9
+  [PASS] doc-256k-mixed: apply 重建结果与 new 逐字节相同  -- rebuilt 264144B vs new 264144B
+  [ADV-OK] doc-256k-mixed: blocks_verified 语义（=COPY 块数 29 或 总块数，歧义 A7）  -- json=29 copy_blocks=29 new_blocks=33
+  [PASS] doc-1m-move: apply 退出码 0  -- rc=0 0.25s json={"kind": "apply", "ok": true, "bytes_written": 1048576, "blocks_verified": 125, "ops_applied": 7, "sha256_hex": "36798846d5ecf981c53f31ad9a901675bb368a59e43594dabeaf72f4fc7c6a52"}
+  [PASS] doc-1m-move: apply 输出 JSON 且 kind=apply  -- rc=0 0.25s json={"kind": "apply", "ok": true, "bytes_written": 1048576, "blocks_verified": 125, "ops_applied": 7, "sha256_hex": "36798846d5ecf981c53f31ad9a901675bb368a59e43594dabeaf72f4fc7c6a52"}
+  [PASS] doc-1m-move: apply ok == true  -- rc=0 0.25s json={"kind": "apply", "ok": true, "bytes_written": 1048576, "blocks_verified": 125, "ops_applied": 7, "sha256_hex": "36798846d5ecf981c53f31ad9a901675bb368a59e43594dabeaf72f4fc7c6a52"}
+  [PASS] doc-1m-move: apply bytes_written == len(new)  -- 1048576 vs 1048576
+  [PASS] doc-1m-move: apply sha256_hex == hashlib(new)  -- 36798846d5ecf981c53f31ad9a901675bb368a59e43594dabeaf72f4fc7c6a52 vs 36798846d5ecf981c53f31ad9a901675bb368a59e43594dabeaf72f4fc7c6a52
+  [PASS] doc-1m-move: apply 重建结果与 new 逐字节相同  -- rebuilt 1048576B vs new 1048576B
+  [ADV-OK] doc-1m-move: blocks_verified 语义（=COPY 块数 125 或 总块数，歧义 A7）  -- json=125 copy_blocks=125 new_blocks=128
+  [PASS] doc-2m-mixed: apply 退出码 0  -- rc=0 0.31s json={"kind": "apply", "ok": true, "bytes_written": 2087152, "blocks_verified": 243, "ops_applied": 13, "sha256_hex": "30d2cd2b14c360b9bdf8c8542dabf495f3dc3c5bc001c80f407dbd41b144d57e"}
+  [PASS] doc-2m-mixed: apply 输出 JSON 且 kind=apply  -- rc=0 0.31s json={"kind": "apply", "ok": true, "bytes_written": 2087152, "blocks_verified": 243, "ops_applied": 13, "sha256_hex": "30d2cd2b14c360b9bdf8c8542dabf495f3dc3c5bc001c80f407dbd41b144d57e"}
+  [PASS] doc-2m-mixed: apply ok == true  -- rc=0 0.31s json={"kind": "apply", "ok": true, "bytes_written": 2087152, "blocks_verified": 243, "ops_applied": 13, "sha256_hex": "30d2cd2b14c360b9bdf8c8542dabf495f3dc3c5bc001c80f407dbd41b144d57e"}
+  [PASS] doc-2m-mixed: apply bytes_written == len(new)  -- 2087152 vs 2087152
+  [PASS] doc-2m-mixed: apply sha256_hex == hashlib(new)  -- 30d2cd2b14c360b9bdf8c8542dabf495f3dc3c5bc001c80f407dbd41b144d57e vs 30d2cd2b14c360b9bdf8c8542dabf495f3dc3c5bc001c80f407dbd41b144d57e
+  [PASS] doc-2m-mixed: apply 重建结果与 new 逐字节相同  -- rebuilt 2087152B vs new 2087152B
+  [ADV-OK] doc-2m-mixed: blocks_verified 语义（=COPY 块数 243 或 总块数，歧义 A7）  -- json=243 copy_blocks=243 new_blocks=255
+  [PASS] doc-64k-identical: apply 退出码 0  -- rc=0 0.16s json={"kind": "apply", "ok": true, "bytes_written": 65536, "blocks_verified": 8, "ops_applied": 1, "sha256_hex": "11733188137912662ba6a160bf13bfb714739df487c08a0a595c410b2e7049e0"}
+  [PASS] doc-64k-identical: apply 输出 JSON 且 kind=apply  -- rc=0 0.16s json={"kind": "apply", "ok": true, "bytes_written": 65536, "blocks_verified": 8, "ops_applied": 1, "sha256_hex": "11733188137912662ba6a160bf13bfb714739df487c08a0a595c410b2e7049e0"}
+  [PASS] doc-64k-identical: apply ok == true  -- rc=0 0.16s json={"kind": "apply", "ok": true, "bytes_written": 65536, "blocks_verified": 8, "ops_applied": 1, "sha256_hex": "11733188137912662ba6a160bf13bfb714739df487c08a0a595c410b2e7049e0"}
+  [PASS] doc-64k-identical: apply bytes_written == len(new)  -- 65536 vs 65536
+  [PASS] doc-64k-identical: apply sha256_hex == hashlib(new)  -- 11733188137912662ba6a160bf13bfb714739df487c08a0a595c410b2e7049e0 vs 11733188137912662ba6a160bf13bfb714739df487c08a0a595c410b2e7049e0
+  [PASS] doc-64k-identical: apply 重建结果与 new 逐字节相同  -- rebuilt 65536B vs new 65536B
+  [ADV-OK] doc-64k-identical: blocks_verified 语义（=COPY 块数 8 或 总块数，歧义 A7）  -- json=8 copy_blocks=8 new_blocks=8
+  [PASS] doc-64k-allnew: apply 退出码 0  -- rc=0 0.13s json={"kind": "apply", "ok": true, "bytes_written": 65536, "blocks_verified": 0, "ops_applied": 1, "sha256_hex": "1ddb6c3be841df44c02bfdd62e17f773f37934e4bfa3f15a19fcb6eb8d294e48"}
+  [PASS] doc-64k-allnew: apply 输出 JSON 且 kind=apply  -- rc=0 0.13s json={"kind": "apply", "ok": true, "bytes_written": 65536, "blocks_verified": 0, "ops_applied": 1, "sha256_hex": "1ddb6c3be841df44c02bfdd62e17f773f37934e4bfa3f15a19fcb6eb8d294e48"}
+  [PASS] doc-64k-allnew: apply ok == true  -- rc=0 0.13s json={"kind": "apply", "ok": true, "bytes_written": 65536, "blocks_verified": 0, "ops_applied": 1, "sha256_hex": "1ddb6c3be841df44c02bfdd62e17f773f37934e4bfa3f15a19fcb6eb8d294e48"}
+  [PASS] doc-64k-allnew: apply bytes_written == len(new)  -- 65536 vs 65536
+  [PASS] doc-64k-allnew: apply sha256_hex == hashlib(new)  -- 1ddb6c3be841df44c02bfdd62e17f773f37934e4bfa3f15a19fcb6eb8d294e48 vs 1ddb6c3be841df44c02bfdd62e17f773f37934e4bfa3f15a19fcb6eb8d294e48
+  [PASS] doc-64k-allnew: apply 重建结果与 new 逐字节相同  -- rebuilt 65536B vs new 65536B
+  [ADV-NO] doc-64k-allnew: blocks_verified 语义（=COPY 块数 0 或 总块数，歧义 A7）  -- json=0 copy_blocks=0 new_blocks=8
+  [PASS] doc-256k-1pct-blocks: apply 退出码 0  -- rc=0 0.16s json={"kind": "apply", "ok": true, "bytes_written": 262144, "blocks_verified": 31, "ops_applied": 3, "sha256_hex": "09ee3a09496e8e898703cc9878668d375e5ce8cf4c8ada83da63361d44a3c3a2"}
+  [PASS] doc-256k-1pct-blocks: apply 输出 JSON 且 kind=apply  -- rc=0 0.16s json={"kind": "apply", "ok": true, "bytes_written": 262144, "blocks_verified": 31, "ops_applied": 3, "sha256_hex": "09ee3a09496e8e898703cc9878668d375e5ce8cf4c8ada83da63361d44a3c3a2"}
+  [PASS] doc-256k-1pct-blocks: apply ok == true  -- rc=0 0.16s json={"kind": "apply", "ok": true, "bytes_written": 262144, "blocks_verified": 31, "ops_applied": 3, "sha256_hex": "09ee3a09496e8e898703cc9878668d375e5ce8cf4c8ada83da63361d44a3c3a2"}
+  [PASS] doc-256k-1pct-blocks: apply bytes_written == len(new)  -- 262144 vs 262144
+  [PASS] doc-256k-1pct-blocks: apply sha256_hex == hashlib(new)  -- 09ee3a09496e8e898703cc9878668d375e5ce8cf4c8ada83da63361d44a3c3a2 vs 09ee3a09496e8e898703cc9878668d375e5ce8cf4c8ada83da63361d44a3c3a2
+  [PASS] doc-256k-1pct-blocks: apply 重建结果与 new 逐字节相同  -- rebuilt 262144B vs new 262144B
+  [ADV-OK] doc-256k-1pct-blocks: blocks_verified 语义（=COPY 块数 31 或 总块数，歧义 A7）  -- json=31 copy_blocks=31 new_blocks=32
+  [PASS] tiny-empty: apply 退出码 0  -- rc=0 0.12s json={"kind": "apply", "ok": true, "bytes_written": 0, "blocks_verified": 0, "ops_applied": 0, "sha256_hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
+  [PASS] tiny-empty: apply 输出 JSON 且 kind=apply  -- rc=0 0.12s json={"kind": "apply", "ok": true, "bytes_written": 0, "blocks_verified": 0, "ops_applied": 0, "sha256_hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
+  [PASS] tiny-empty: apply ok == true  -- rc=0 0.12s json={"kind": "apply", "ok": true, "bytes_written": 0, "blocks_verified": 0, "ops_applied": 0, "sha256_hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
+  [PASS] tiny-empty: apply bytes_written == len(new)  -- 0 vs 0
+  [PASS] tiny-empty: apply sha256_hex == hashlib(new)  -- e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 vs e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  [PASS] tiny-empty: apply 重建结果与 new 逐字节相同  -- rebuilt 0B vs new 0B
+  [ADV-NO] tiny-empty: blocks_verified 语义（=COPY 块数 0 或 总块数，歧义 A7）  -- json=0 copy_blocks=0 new_blocks=0
+  [PASS] tiny-1: apply 退出码 0  -- rc=0 0.14s json={"kind": "apply", "ok": true, "bytes_written": 1, "blocks_verified": 0, "ops_applied": 1, "sha256_hex": "df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c"}
+  [PASS] tiny-1: apply 输出 JSON 且 kind=apply  -- rc=0 0.14s json={"kind": "apply", "ok": true, "bytes_written": 1, "blocks_verified": 0, "ops_applied": 1, "sha256_hex": "df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c"}
+  [PASS] tiny-1: apply ok == true  -- rc=0 0.14s json={"kind": "apply", "ok": true, "bytes_written": 1, "blocks_verified": 0, "ops_applied": 1, "sha256_hex": "df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c"}
+  [PASS] tiny-1: apply bytes_written == len(new)  -- 1 vs 1
+  [PASS] tiny-1: apply sha256_hex == hashlib(new)  -- df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c vs df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c
+  [PASS] tiny-1: apply 重建结果与 new 逐字节相同  -- rebuilt 1B vs new 1B
+  [ADV-NO] tiny-1: blocks_verified 语义（=COPY 块数 0 或 总块数，歧义 A7）  -- json=0 copy_blocks=0 new_blocks=1
+  [PASS] tiny-100: apply 退出码 0  -- rc=0 0.11s json={"kind": "apply", "ok": true, "bytes_written": 120, "blocks_verified": 0, "ops_applied": 1, "sha256_hex": "d340cc796733929de4a2e106385a36319a4d235cf3a3c46dc8c0c60f091dd345"}
+  [PASS] tiny-100: apply 输出 JSON 且 kind=apply  -- rc=0 0.11s json={"kind": "apply", "ok": true, "bytes_written": 120, "blocks_verified": 0, "ops_applied": 1, "sha256_hex": "d340cc796733929de4a2e106385a36319a4d235cf3a3c46dc8c0c60f091dd345"}
+  [PASS] tiny-100: apply ok == true  -- rc=0 0.11s json={"kind": "apply", "ok": true, "bytes_written": 120, "blocks_verified": 0, "ops_applied": 1, "sha256_hex": "d340cc796733929de4a2e106385a36319a4d235cf3a3c46dc8c0c60f091dd345"}
+  [PASS] tiny-100: apply bytes_written == len(new)  -- 120 vs 120
+  [PASS] tiny-100: apply sha256_hex == hashlib(new)  -- d340cc796733929de4a2e106385a36319a4d235cf3a3c46dc8c0c60f091dd345 vs d340cc796733929de4a2e106385a36319a4d235cf3a3c46dc8c0c60f091dd345
+  [PASS] tiny-100: apply 重建结果与 new 逐字节相同  -- rebuilt 120B vs new 120B
+  [ADV-NO] tiny-100: blocks_verified 语义（=COPY 块数 0 或 总块数，歧义 A7）  -- json=0 copy_blocks=0 new_blocks=1
+
+## cli-interop
+  [PASS] doc-64k-insert: CLI 接受独立规划器产出的 DDLT（apply 退出码 0）  -- rc=0 0.15s json={"kind": "apply", "ok": true, "bytes_written": 67584, "blocks_verified": 0, "ops_applied": 1, "sha256_hex": "9443596a39fd87d2b69372b1af7c1f8077a6b2f515dbc0d60433d9145239541a"}
+  [PASS] doc-64k-insert: 独立 DDLT 的 apply JSON ok == true  -- rc=0 0.15s json={"kind": "apply", "ok": true, "bytes_written": 67584, "blocks_verified": 0, "ops_applied": 1, "sha256_hex": "9443596a39fd87d2b69372b1af7c1f8077a6b2f515dbc0d60433d9145239541a"}
+  [PASS] doc-64k-insert: CLI 用独立 DDLT 重建的字节与 new 逐字节相同  -- 67584B vs 67584B
+  [PASS] doc-256k-mixed: CLI 接受独立规划器产出的 DDLT（apply 退出码 0）  -- rc=0 0.17s json={"kind": "apply", "ok": true, "bytes_written": 264144, "blocks_verified": 0, "ops_applied": 1, "sha256_hex": "8448e0dbb809dbcfade5e2bf59d2e727e5cc450774a95b983d90ef508bfb5ef9"}
+  [PASS] doc-256k-mixed: 独立 DDLT 的 apply JSON ok == true  -- rc=0 0.17s json={"kind": "apply", "ok": true, "bytes_written": 264144, "blocks_verified": 0, "ops_applied": 1, "sha256_hex": "8448e0dbb809dbcfade5e2bf59d2e727e5cc450774a95b983d90ef508bfb5ef9"}
+  [PASS] doc-256k-mixed: CLI 用独立 DDLT 重建的字节与 new 逐字节相同  -- 264144B vs 264144B
+  [PASS] doc-1m-move: CLI 接受独立规划器产出的 DDLT（apply 退出码 0）  -- rc=0 0.22s json={"kind": "apply", "ok": true, "bytes_written": 1048576, "blocks_verified": 0, "ops_applied": 1, "sha256_hex": "36798846d5ecf981c53f31ad9a901675bb368a59e43594dabeaf72f4fc7c6a52"}
+  [PASS] doc-1m-move: 独立 DDLT 的 apply JSON ok == true  -- rc=0 0.22s json={"kind": "apply", "ok": true, "bytes_written": 1048576, "blocks_verified": 0, "ops_applied": 1, "sha256_hex": "36798846d5ecf981c53f31ad9a901675bb368a59e43594dabeaf72f4fc7c6a52"}
+  [PASS] doc-1m-move: CLI 用独立 DDLT 重建的字节与 new 逐字节相同  -- 1048576B vs 1048576B
+  [PASS] doc-2m-mixed: CLI 接受独立规划器产出的 DDLT（apply 退出码 0）  -- rc=0 0.31s json={"kind": "apply", "ok": true, "bytes_written": 2087152, "blocks_verified": 0, "ops_applied": 1, "sha256_hex": "30d2cd2b14c360b9bdf8c8542dabf495f3dc3c5bc001c80f407dbd41b144d57e"}
+  [PASS] doc-2m-mixed: 独立 DDLT 的 apply JSON ok == true  -- rc=0 0.31s json={"kind": "apply", "ok": true, "bytes_written": 2087152, "blocks_verified": 0, "ops_applied": 1, "sha256_hex": "30d2cd2b14c360b9bdf8c8542dabf495f3dc3c5bc001c80f407dbd41b144d57e"}
+  [PASS] doc-2m-mixed: CLI 用独立 DDLT 重建的字节与 new 逐字节相同  -- 2087152B vs 2087152B
+  [PASS] doc-64k-identical: CLI 接受独立规划器产出的 DDLT（apply 退出码 0）  -- rc=0 0.15s json={"kind": "apply", "ok": true, "bytes_written": 65536, "blocks_verified": 0, "ops_applied": 1, "sha256_hex": "11733188137912662ba6a160bf13bfb714739df487c08a0a595c410b2e7049e0"}
+  [PASS] doc-64k-identical: 独立 DDLT 的 apply JSON ok == true  -- rc=0 0.15s json={"kind": "apply", "ok": true, "bytes_written": 65536, "blocks_verified": 0, "ops_applied": 1, "sha256_hex": "11733188137912662ba6a160bf13bfb714739df487c08a0a595c410b2e7049e0"}
+  [PASS] doc-64k-identical: CLI 用独立 DDLT 重建的字节与 new 逐字节相同  -- 65536B vs 65536B
+  [PASS] doc-64k-allnew: CLI 接受独立规划器产出的 DDLT（apply 退出码 0）  -- rc=0 0.13s json={"kind": "apply", "ok": true, "bytes_written": 65536, "blocks_verified": 0, "ops_applied": 1, "sha256_hex": "1ddb6c3be841df44c02bfdd62e17f773f37934e4bfa3f15a19fcb6eb8d294e48"}
+  [PASS] doc-64k-allnew: 独立 DDLT 的 apply JSON ok == true  -- rc=0 0.13s json={"kind": "apply", "ok": true, "bytes_written": 65536, "blocks_verified": 0, "ops_applied": 1, "sha256_hex": "1ddb6c3be841df44c02bfdd62e17f773f37934e4bfa3f15a19fcb6eb8d294e48"}
+  [PASS] doc-64k-allnew: CLI 用独立 DDLT 重建的字节与 new 逐字节相同  -- 65536B vs 65536B
+  [PASS] doc-256k-1pct-blocks: CLI 接受独立规划器产出的 DDLT（apply 退出码 0）  -- rc=0 0.18s json={"kind": "apply", "ok": true, "bytes_written": 262144, "blocks_verified": 0, "ops_applied": 1, "sha256_hex": "09ee3a09496e8e898703cc9878668d375e5ce8cf4c8ada83da63361d44a3c3a2"}
+  [PASS] doc-256k-1pct-blocks: 独立 DDLT 的 apply JSON ok == true  -- rc=0 0.18s json={"kind": "apply", "ok": true, "bytes_written": 262144, "blocks_verified": 0, "ops_applied": 1, "sha256_hex": "09ee3a09496e8e898703cc9878668d375e5ce8cf4c8ada83da63361d44a3c3a2"}
+  [PASS] doc-256k-1pct-blocks: CLI 用独立 DDLT 重建的字节与 new 逐字节相同  -- 262144B vs 262144B
+  [PASS] tiny-empty: CLI 接受独立规划器产出的 DDLT（apply 退出码 0）  -- rc=0 0.11s json={"kind": "apply", "ok": true, "bytes_written": 0, "blocks_verified": 0, "ops_applied": 0, "sha256_hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
+  [PASS] tiny-empty: 独立 DDLT 的 apply JSON ok == true  -- rc=0 0.11s json={"kind": "apply", "ok": true, "bytes_written": 0, "blocks_verified": 0, "ops_applied": 0, "sha256_hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
+  [PASS] tiny-empty: CLI 用独立 DDLT 重建的字节与 new 逐字节相同  -- 0B vs 0B
+  [PASS] tiny-1: CLI 接受独立规划器产出的 DDLT（apply 退出码 0）  -- rc=0 0.17s json={"kind": "apply", "ok": true, "bytes_written": 1, "blocks_verified": 0, "ops_applied": 1, "sha256_hex": "df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c"}
+  [PASS] tiny-1: 独立 DDLT 的 apply JSON ok == true  -- rc=0 0.17s json={"kind": "apply", "ok": true, "bytes_written": 1, "blocks_verified": 0, "ops_applied": 1, "sha256_hex": "df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c"}
+  [PASS] tiny-1: CLI 用独立 DDLT 重建的字节与 new 逐字节相同  -- 1B vs 1B
+  [PASS] tiny-100: CLI 接受独立规划器产出的 DDLT（apply 退出码 0）  -- rc=0 0.13s json={"kind": "apply", "ok": true, "bytes_written": 120, "blocks_verified": 0, "ops_applied": 1, "sha256_hex": "d340cc796733929de4a2e106385a36319a4d235cf3a3c46dc8c0c60f091dd345"}
+  [PASS] tiny-100: 独立 DDLT 的 apply JSON ok == true  -- rc=0 0.13s json={"kind": "apply", "ok": true, "bytes_written": 120, "blocks_verified": 0, "ops_applied": 1, "sha256_hex": "d340cc796733929de4a2e106385a36319a4d235cf3a3c46dc8c0c60f091dd345"}
+  [PASS] tiny-100: CLI 用独立 DDLT 重建的字节与 new 逐字节相同  -- 120B vs 120B
+
+## cli-chunk
+  [PASS] doc-64k-insert: chunk 退出码 0  -- rc=0 0.18s json={"kind": "chunk", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-64k-insert.new", "length": 67584, "chunk_count": 14, "unique_chunks": 14, "new_chunks": 14, "reused_chunks": 0, "stored_bytes": 67584, "saved_bytes": 0, "dedup_ratio": 0.0, "manifest_bytes": 526, "root_hex": "6cd3fa53286bc05f1bb9f26
+  [PASS] doc-64k-insert: chunk 输出 JSON 且 kind=chunk  -- rc=0 0.18s json={"kind": "chunk", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-64k-insert.new", "length": 67584, "chunk_count": 14, "unique_chunks": 14, "new_chunks": 14, "reused_chunks": 0, "stored_bytes": 67584, "saved_bytes": 0, "dedup_ratio": 0.0, "manifest_bytes": 526, "root_hex": "6cd3fa53286bc05f1bb9f26
+  [PASS] doc-64k-insert: JSON 契约字段齐全（§8.1）  -- keys=['chunk_count', 'dedup_ratio', 'kind', 'length', 'manifest_bytes', 'new_chunks', 'path', 'reused_chunks', 'root_hex', 'saved_bytes', 'stored_bytes', 'unique_chunks']
+  [INFO] doc-64k-insert: chunk JSON 额外字段  -- 实现另外输出了 ['new_chunks', 'reused_chunks', 'stored_bytes', 'saved_bytes']（§8.1 未列；外部脚本按固定字段解析）
+  [PASS] doc-64k-insert: chunk length == 文件长度  -- 67584 vs 67584
+  [PASS] doc-64k-insert: chunk unique_chunks <= chunk_count  -- unique=14 count=14
+  [PASS] doc-64k-insert: root_hex 为 64 位十六进制  -- '6cd3fa53286bc05f1bb9f268bfd2ecdc0b947a7416ddd6654e67bbc05b6ba57e'
+  [ADV-NO] doc-64k-insert: dedup_ratio ≈ unique_chunks/chunk_count（±1e-3）  -- json=0.0 expect=1.0000（示例 dedup_ratio 精度 3 位，歧义 A6）
+  [ADV-NO] doc-64k-insert: manifest_bytes == 32*chunk_count+32（由 §8.1 示例反推）或 DCHK 全量 41+36*count（歧义 A4）  -- json=526 candidates=(480, 545)
+  [FAIL] doc-64k-insert: DCHK（chunk --out）可被独立解析  -- DCHK payload 517 byte(s) != chunk_count*36+32 = 73760
+  [PASS] doc-256k-mixed: chunk 退出码 0  -- rc=0 0.17s json={"kind": "chunk", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-256k-mixed.new", "length": 264144, "chunk_count": 53, "unique_chunks": 53, "new_chunks": 53, "reused_chunks": 0, "stored_bytes": 264144, "saved_bytes": 0, "dedup_ratio": 0.0, "manifest_bytes": 1853, "root_hex": "11c8e2bbb50aad53ef05
+  [PASS] doc-256k-mixed: chunk 输出 JSON 且 kind=chunk  -- rc=0 0.17s json={"kind": "chunk", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-256k-mixed.new", "length": 264144, "chunk_count": 53, "unique_chunks": 53, "new_chunks": 53, "reused_chunks": 0, "stored_bytes": 264144, "saved_bytes": 0, "dedup_ratio": 0.0, "manifest_bytes": 1853, "root_hex": "11c8e2bbb50aad53ef05
+  [PASS] doc-256k-mixed: JSON 契约字段齐全（§8.1）  -- keys=['chunk_count', 'dedup_ratio', 'kind', 'length', 'manifest_bytes', 'new_chunks', 'path', 'reused_chunks', 'root_hex', 'saved_bytes', 'stored_bytes', 'unique_chunks']
+  [INFO] doc-256k-mixed: chunk JSON 额外字段  -- 实现另外输出了 ['new_chunks', 'reused_chunks', 'stored_bytes', 'saved_bytes']（§8.1 未列；外部脚本按固定字段解析）
+  [PASS] doc-256k-mixed: chunk length == 文件长度  -- 264144 vs 264144
+  [PASS] doc-256k-mixed: chunk unique_chunks <= chunk_count  -- unique=53 count=53
+  [PASS] doc-256k-mixed: root_hex 为 64 位十六进制  -- '11c8e2bbb50aad53ef055d5038f057afacf8e39a99ebbd86974d116a6b3acc73'
+  [ADV-NO] doc-256k-mixed: dedup_ratio ≈ unique_chunks/chunk_count（±1e-3）  -- json=0.0 expect=1.0000（示例 dedup_ratio 精度 3 位，歧义 A6）
+  [ADV-NO] doc-256k-mixed: manifest_bytes == 32*chunk_count+32（由 §8.1 示例反推）或 DCHK 全量 41+36*count（歧义 A4）  -- json=1853 candidates=(1728, 1949)
+  [FAIL] doc-256k-mixed: DCHK（chunk --out）可被独立解析  -- DCHK payload 1844 byte(s) != chunk_count*36+32 = 73760
+  [PASS] doc-1m-move: chunk 退出码 0  -- rc=0 0.30s json={"kind": "chunk", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-1m-move.new", "length": 1048576, "chunk_count": 202, "unique_chunks": 202, "new_chunks": 202, "reused_chunks": 0, "stored_bytes": 1048576, "saved_bytes": 0, "dedup_ratio": 0.0, "manifest_bytes": 6920, "root_hex": "f825a1cd112997bd82
+  [PASS] doc-1m-move: chunk 输出 JSON 且 kind=chunk  -- rc=0 0.30s json={"kind": "chunk", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-1m-move.new", "length": 1048576, "chunk_count": 202, "unique_chunks": 202, "new_chunks": 202, "reused_chunks": 0, "stored_bytes": 1048576, "saved_bytes": 0, "dedup_ratio": 0.0, "manifest_bytes": 6920, "root_hex": "f825a1cd112997bd82
+  [PASS] doc-1m-move: JSON 契约字段齐全（§8.1）  -- keys=['chunk_count', 'dedup_ratio', 'kind', 'length', 'manifest_bytes', 'new_chunks', 'path', 'reused_chunks', 'root_hex', 'saved_bytes', 'stored_bytes', 'unique_chunks']
+  [INFO] doc-1m-move: chunk JSON 额外字段  -- 实现另外输出了 ['new_chunks', 'reused_chunks', 'stored_bytes', 'saved_bytes']（§8.1 未列；外部脚本按固定字段解析）
+  [PASS] doc-1m-move: chunk length == 文件长度  -- 1048576 vs 1048576
+  [PASS] doc-1m-move: chunk unique_chunks <= chunk_count  -- unique=202 count=202
+  [PASS] doc-1m-move: root_hex 为 64 位十六进制  -- 'f825a1cd112997bd82f79c29e087246bcb9694d3f066f6c62350a97ec8f6ad40'
+  [ADV-NO] doc-1m-move: dedup_ratio ≈ unique_chunks/chunk_count（±1e-3）  -- json=0.0 expect=1.0000（示例 dedup_ratio 精度 3 位，歧义 A6）
+  [ADV-NO] doc-1m-move: manifest_bytes == 32*chunk_count+32（由 §8.1 示例反推）或 DCHK 全量 41+36*count（歧义 A4）  -- json=6920 candidates=(6496, 7313)
+  [FAIL] doc-1m-move: DCHK（chunk --out）可被独立解析  -- DCHK payload 6911 byte(s) != chunk_count*36+32 = 73760
+  [PASS] doc-2m-mixed: chunk 退出码 0  -- rc=0 0.36s json={"kind": "chunk", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-2m-mixed.new", "length": 2087152, "chunk_count": 404, "unique_chunks": 404, "new_chunks": 404, "reused_chunks": 0, "stored_bytes": 2087152, "saved_bytes": 0, "dedup_ratio": 0.0, "manifest_bytes": 13789, "root_hex": "d2e0a13b61c92722
+  [PASS] doc-2m-mixed: chunk 输出 JSON 且 kind=chunk  -- rc=0 0.36s json={"kind": "chunk", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-2m-mixed.new", "length": 2087152, "chunk_count": 404, "unique_chunks": 404, "new_chunks": 404, "reused_chunks": 0, "stored_bytes": 2087152, "saved_bytes": 0, "dedup_ratio": 0.0, "manifest_bytes": 13789, "root_hex": "d2e0a13b61c92722
+  [PASS] doc-2m-mixed: JSON 契约字段齐全（§8.1）  -- keys=['chunk_count', 'dedup_ratio', 'kind', 'length', 'manifest_bytes', 'new_chunks', 'path', 'reused_chunks', 'root_hex', 'saved_bytes', 'stored_bytes', 'unique_chunks']
+  [INFO] doc-2m-mixed: chunk JSON 额外字段  -- 实现另外输出了 ['new_chunks', 'reused_chunks', 'stored_bytes', 'saved_bytes']（§8.1 未列；外部脚本按固定字段解析）
+  [PASS] doc-2m-mixed: chunk length == 文件长度  -- 2087152 vs 2087152
+  [PASS] doc-2m-mixed: chunk unique_chunks <= chunk_count  -- unique=404 count=404
+  [PASS] doc-2m-mixed: root_hex 为 64 位十六进制  -- 'd2e0a13b61c92722b2543e578eb23dc19fa07536e27e54670ef419d99826c7b6'
+  [ADV-NO] doc-2m-mixed: dedup_ratio ≈ unique_chunks/chunk_count（±1e-3）  -- json=0.0 expect=1.0000（示例 dedup_ratio 精度 3 位，歧义 A6）
+  [ADV-NO] doc-2m-mixed: manifest_bytes == 32*chunk_count+32（由 §8.1 示例反推）或 DCHK 全量 41+36*count（歧义 A4）  -- json=13789 candidates=(12960, 14585)
+  [FAIL] doc-2m-mixed: DCHK（chunk --out）可被独立解析  -- DCHK payload 13780 byte(s) != chunk_count*36+32 = 73760
+  [PASS] doc-64k-identical: chunk 退出码 0  -- rc=0 0.17s json={"kind": "chunk", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-64k-identical.new", "length": 65536, "chunk_count": 10, "unique_chunks": 10, "new_chunks": 10, "reused_chunks": 0, "stored_bytes": 65536, "saved_bytes": 0, "dedup_ratio": 0.0, "manifest_bytes": 390, "root_hex": "d92d0893870869c4cdd9
+  [PASS] doc-64k-identical: chunk 输出 JSON 且 kind=chunk  -- rc=0 0.17s json={"kind": "chunk", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-64k-identical.new", "length": 65536, "chunk_count": 10, "unique_chunks": 10, "new_chunks": 10, "reused_chunks": 0, "stored_bytes": 65536, "saved_bytes": 0, "dedup_ratio": 0.0, "manifest_bytes": 390, "root_hex": "d92d0893870869c4cdd9
+  [PASS] doc-64k-identical: JSON 契约字段齐全（§8.1）  -- keys=['chunk_count', 'dedup_ratio', 'kind', 'length', 'manifest_bytes', 'new_chunks', 'path', 'reused_chunks', 'root_hex', 'saved_bytes', 'stored_bytes', 'unique_chunks']
+  [INFO] doc-64k-identical: chunk JSON 额外字段  -- 实现另外输出了 ['new_chunks', 'reused_chunks', 'stored_bytes', 'saved_bytes']（§8.1 未列；外部脚本按固定字段解析）
+  [PASS] doc-64k-identical: chunk length == 文件长度  -- 65536 vs 65536
+  [PASS] doc-64k-identical: chunk unique_chunks <= chunk_count  -- unique=10 count=10
+  [PASS] doc-64k-identical: root_hex 为 64 位十六进制  -- 'd92d0893870869c4cdd9ade32809e951a05ce854f084dafd33f856c22e53d320'
+  [ADV-NO] doc-64k-identical: dedup_ratio ≈ unique_chunks/chunk_count（±1e-3）  -- json=0.0 expect=1.0000（示例 dedup_ratio 精度 3 位，歧义 A6）
+  [ADV-NO] doc-64k-identical: manifest_bytes == 32*chunk_count+32（由 §8.1 示例反推）或 DCHK 全量 41+36*count（歧义 A4）  -- json=390 candidates=(352, 401)
+  [FAIL] doc-64k-identical: DCHK（chunk --out）可被独立解析  -- DCHK payload 381 byte(s) != chunk_count*36+32 = 73760
+  [PASS] doc-64k-allnew: chunk 退出码 0  -- rc=0 0.17s json={"kind": "chunk", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-64k-allnew.new", "length": 65536, "chunk_count": 14, "unique_chunks": 14, "new_chunks": 14, "reused_chunks": 0, "stored_bytes": 65536, "saved_bytes": 0, "dedup_ratio": 0.0, "manifest_bytes": 526, "root_hex": "24741840817ecd548a9326c
+  [PASS] doc-64k-allnew: chunk 输出 JSON 且 kind=chunk  -- rc=0 0.17s json={"kind": "chunk", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-64k-allnew.new", "length": 65536, "chunk_count": 14, "unique_chunks": 14, "new_chunks": 14, "reused_chunks": 0, "stored_bytes": 65536, "saved_bytes": 0, "dedup_ratio": 0.0, "manifest_bytes": 526, "root_hex": "24741840817ecd548a9326c
+  [PASS] doc-64k-allnew: JSON 契约字段齐全（§8.1）  -- keys=['chunk_count', 'dedup_ratio', 'kind', 'length', 'manifest_bytes', 'new_chunks', 'path', 'reused_chunks', 'root_hex', 'saved_bytes', 'stored_bytes', 'unique_chunks']
+  [INFO] doc-64k-allnew: chunk JSON 额外字段  -- 实现另外输出了 ['new_chunks', 'reused_chunks', 'stored_bytes', 'saved_bytes']（§8.1 未列；外部脚本按固定字段解析）
+  [PASS] doc-64k-allnew: chunk length == 文件长度  -- 65536 vs 65536
+  [PASS] doc-64k-allnew: chunk unique_chunks <= chunk_count  -- unique=14 count=14
+  [PASS] doc-64k-allnew: root_hex 为 64 位十六进制  -- '24741840817ecd548a9326c192c327c1e20213ef5cab4aef0ea7f51314cc00c3'
+  [ADV-NO] doc-64k-allnew: dedup_ratio ≈ unique_chunks/chunk_count（±1e-3）  -- json=0.0 expect=1.0000（示例 dedup_ratio 精度 3 位，歧义 A6）
+  [ADV-NO] doc-64k-allnew: manifest_bytes == 32*chunk_count+32（由 §8.1 示例反推）或 DCHK 全量 41+36*count（歧义 A4）  -- json=526 candidates=(480, 545)
+  [FAIL] doc-64k-allnew: DCHK（chunk --out）可被独立解析  -- DCHK payload 517 byte(s) != chunk_count*36+32 = 73760
+  [PASS] doc-256k-1pct-blocks: chunk 退出码 0  -- rc=0 0.23s json={"kind": "chunk", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-256k-1pct-blocks.new", "length": 262144, "chunk_count": 48, "unique_chunks": 48, "new_chunks": 48, "reused_chunks": 0, "stored_bytes": 262144, "saved_bytes": 0, "dedup_ratio": 0.0, "manifest_bytes": 1683, "root_hex": "586ea11bed7803
+  [PASS] doc-256k-1pct-blocks: chunk 输出 JSON 且 kind=chunk  -- rc=0 0.23s json={"kind": "chunk", "path": "C:\\Temp\\deltasync-verify-n65sfbap\\doc-256k-1pct-blocks.new", "length": 262144, "chunk_count": 48, "unique_chunks": 48, "new_chunks": 48, "reused_chunks": 0, "stored_bytes": 262144, "saved_bytes": 0, "dedup_ratio": 0.0, "manifest_bytes": 1683, "root_hex": "586ea11bed7803
+  [PASS] doc-256k-1pct-blocks: JSON 契约字段齐全（§8.1）  -- keys=['chunk_count', 'dedup_ratio', 'kind', 'length', 'manifest_bytes', 'new_chunks', 'path', 'reused_chunks', 'root_hex', 'saved_bytes', 'stored_bytes', 'unique_chunks']
+  [INFO] doc-256k-1pct-blocks: chunk JSON 额外字段  -- 实现另外输出了 ['new_chunks', 'reused_chunks', 'stored_bytes', 'saved_bytes']（§8.1 未列；外部脚本按固定字段解析）
+  [PASS] doc-256k-1pct-blocks: chunk length == 文件长度  -- 262144 vs 262144
+  [PASS] doc-256k-1pct-blocks: chunk unique_chunks <= chunk_count  -- unique=48 count=48
+  [PASS] doc-256k-1pct-blocks: root_hex 为 64 位十六进制  -- '586ea11bed780343efc190c9d8891669e8cf33357b09abd30712dfcf0f6920c7'
+  [ADV-NO] doc-256k-1pct-blocks: dedup_ratio ≈ unique_chunks/chunk_count（±1e-3）  -- json=0.0 expect=1.0000（示例 dedup_ratio 精度 3 位，歧义 A6）
+  [ADV-NO] doc-256k-1pct-blocks: manifest_bytes == 32*chunk_count+32（由 §8.1 示例反推）或 DCHK 全量 41+36*count（歧义 A4）  -- json=1683 candidates=(1568, 1769)
+  [FAIL] doc-256k-1pct-blocks: DCHK（chunk --out）可被独立解析  -- DCHK payload 1674 byte(s) != chunk_count*36+32 = 73760
+
+## cli-verify
+  [PASS] doc-64k-insert: verify 正确 SHA-256 -> ok:true 且退出码 0  -- rc=0 0.12s json={"kind": "verify", "ok": true, "sha256_hex": "9443596a39fd87d2b69372b1af7c1f8077a6b2f515dbc0d60433d9145239541a"}
+  [PASS] doc-64k-insert: verify 回显 sha256_hex == 输入  -- 9443596a39fd87d2b69372b1af7c1f8077a6b2f515dbc0d60433d9145239541a vs 9443596a39fd87d2b69372b1af7c1f8077a6b2f515dbc0d60433d9145239541a
+  [ADV-OK] doc-64k-insert: verify 不匹配的合法 SHA-256 -> 明确否定（ok:false 或 error），不能假成功  -- rc=0 0.12s json={"kind": "verify", "ok": false, "sha256_hex": "9443596a39fd87d2b69372b1af7c1f8077a6b2f515dbc0d60433d9145239541a"} | 走 verify/ok=false 分支（§8.1 只规定「参数错误」用 error JSON，校验不匹配算业务结果，可接受；建议在文档中明确）
+  [ADV-OK] doc-64k-insert: verify 不匹配时的退出码语义（advisory：error→非零 或 ok=false→0 均可）  -- rc=0 0.12s json={"kind": "verify", "ok": false, "sha256_hex": "9443596a39fd87d2b69372b1af7c1f8077a6b2f515dbc0d60433d9145239541a"}
+  [PASS] doc-256k-mixed: verify 正确 SHA-256 -> ok:true 且退出码 0  -- rc=0 0.13s json={"kind": "verify", "ok": true, "sha256_hex": "8448e0dbb809dbcfade5e2bf59d2e727e5cc450774a95b983d90ef508bfb5ef9"}
+  [PASS] doc-256k-mixed: verify 回显 sha256_hex == 输入  -- 8448e0dbb809dbcfade5e2bf59d2e727e5cc450774a95b983d90ef508bfb5ef9 vs 8448e0dbb809dbcfade5e2bf59d2e727e5cc450774a95b983d90ef508bfb5ef9
+  [ADV-OK] doc-256k-mixed: verify 不匹配的合法 SHA-256 -> 明确否定（ok:false 或 error），不能假成功  -- rc=0 0.22s json={"kind": "verify", "ok": false, "sha256_hex": "8448e0dbb809dbcfade5e2bf59d2e727e5cc450774a95b983d90ef508bfb5ef9"} | 走 verify/ok=false 分支（§8.1 只规定「参数错误」用 error JSON，校验不匹配算业务结果，可接受；建议在文档中明确）
+  [ADV-OK] doc-256k-mixed: verify 不匹配时的退出码语义（advisory：error→非零 或 ok=false→0 均可）  -- rc=0 0.22s json={"kind": "verify", "ok": false, "sha256_hex": "8448e0dbb809dbcfade5e2bf59d2e727e5cc450774a95b983d90ef508bfb5ef9"}
+  [PASS] doc-1m-move: verify 正确 SHA-256 -> ok:true 且退出码 0  -- rc=0 0.15s json={"kind": "verify", "ok": true, "sha256_hex": "36798846d5ecf981c53f31ad9a901675bb368a59e43594dabeaf72f4fc7c6a52"}
+  [PASS] doc-1m-move: verify 回显 sha256_hex == 输入  -- 36798846d5ecf981c53f31ad9a901675bb368a59e43594dabeaf72f4fc7c6a52 vs 36798846d5ecf981c53f31ad9a901675bb368a59e43594dabeaf72f4fc7c6a52
+  [ADV-OK] doc-1m-move: verify 不匹配的合法 SHA-256 -> 明确否定（ok:false 或 error），不能假成功  -- rc=0 0.16s json={"kind": "verify", "ok": false, "sha256_hex": "36798846d5ecf981c53f31ad9a901675bb368a59e43594dabeaf72f4fc7c6a52"} | 走 verify/ok=false 分支（§8.1 只规定「参数错误」用 error JSON，校验不匹配算业务结果，可接受；建议在文档中明确）
+  [ADV-OK] doc-1m-move: verify 不匹配时的退出码语义（advisory：error→非零 或 ok=false→0 均可）  -- rc=0 0.16s json={"kind": "verify", "ok": false, "sha256_hex": "36798846d5ecf981c53f31ad9a901675bb368a59e43594dabeaf72f4fc7c6a52"}
+  [PASS] doc-2m-mixed: verify 正确 SHA-256 -> ok:true 且退出码 0  -- rc=0 0.17s json={"kind": "verify", "ok": true, "sha256_hex": "30d2cd2b14c360b9bdf8c8542dabf495f3dc3c5bc001c80f407dbd41b144d57e"}
+  [PASS] doc-2m-mixed: verify 回显 sha256_hex == 输入  -- 30d2cd2b14c360b9bdf8c8542dabf495f3dc3c5bc001c80f407dbd41b144d57e vs 30d2cd2b14c360b9bdf8c8542dabf495f3dc3c5bc001c80f407dbd41b144d57e
+  [ADV-OK] doc-2m-mixed: verify 不匹配的合法 SHA-256 -> 明确否定（ok:false 或 error），不能假成功  -- rc=0 0.17s json={"kind": "verify", "ok": false, "sha256_hex": "30d2cd2b14c360b9bdf8c8542dabf495f3dc3c5bc001c80f407dbd41b144d57e"} | 走 verify/ok=false 分支（§8.1 只规定「参数错误」用 error JSON，校验不匹配算业务结果，可接受；建议在文档中明确）
+  [ADV-OK] doc-2m-mixed: verify 不匹配时的退出码语义（advisory：error→非零 或 ok=false→0 均可）  -- rc=0 0.17s json={"kind": "verify", "ok": false, "sha256_hex": "30d2cd2b14c360b9bdf8c8542dabf495f3dc3c5bc001c80f407dbd41b144d57e"}
+  [PASS] doc-64k-identical: verify 正确 SHA-256 -> ok:true 且退出码 0  -- rc=0 0.12s json={"kind": "verify", "ok": true, "sha256_hex": "11733188137912662ba6a160bf13bfb714739df487c08a0a595c410b2e7049e0"}
+  [PASS] doc-64k-identical: verify 回显 sha256_hex == 输入  -- 11733188137912662ba6a160bf13bfb714739df487c08a0a595c410b2e7049e0 vs 11733188137912662ba6a160bf13bfb714739df487c08a0a595c410b2e7049e0
+  [ADV-OK] doc-64k-identical: verify 不匹配的合法 SHA-256 -> 明确否定（ok:false 或 error），不能假成功  -- rc=0 0.13s json={"kind": "verify", "ok": false, "sha256_hex": "11733188137912662ba6a160bf13bfb714739df487c08a0a595c410b2e7049e0"} | 走 verify/ok=false 分支（§8.1 只规定「参数错误」用 error JSON，校验不匹配算业务结果，可接受；建议在文档中明确）
+  [ADV-OK] doc-64k-identical: verify 不匹配时的退出码语义（advisory：error→非零 或 ok=false→0 均可）  -- rc=0 0.13s json={"kind": "verify", "ok": false, "sha256_hex": "11733188137912662ba6a160bf13bfb714739df487c08a0a595c410b2e7049e0"}
+  [PASS] doc-64k-allnew: verify 正确 SHA-256 -> ok:true 且退出码 0  -- rc=0 0.15s json={"kind": "verify", "ok": true, "sha256_hex": "1ddb6c3be841df44c02bfdd62e17f773f37934e4bfa3f15a19fcb6eb8d294e48"}
+  [PASS] doc-64k-allnew: verify 回显 sha256_hex == 输入  -- 1ddb6c3be841df44c02bfdd62e17f773f37934e4bfa3f15a19fcb6eb8d294e48 vs 1ddb6c3be841df44c02bfdd62e17f773f37934e4bfa3f15a19fcb6eb8d294e48
+  [ADV-OK] doc-64k-allnew: verify 不匹配的合法 SHA-256 -> 明确否定（ok:false 或 error），不能假成功  -- rc=0 0.12s json={"kind": "verify", "ok": false, "sha256_hex": "1ddb6c3be841df44c02bfdd62e17f773f37934e4bfa3f15a19fcb6eb8d294e48"} | 走 verify/ok=false 分支（§8.1 只规定「参数错误」用 error JSON，校验不匹配算业务结果，可接受；建议在文档中明确）
+  [ADV-OK] doc-64k-allnew: verify 不匹配时的退出码语义（advisory：error→非零 或 ok=false→0 均可）  -- rc=0 0.12s json={"kind": "verify", "ok": false, "sha256_hex": "1ddb6c3be841df44c02bfdd62e17f773f37934e4bfa3f15a19fcb6eb8d294e48"}
+  [PASS] doc-256k-1pct-blocks: verify 正确 SHA-256 -> ok:true 且退出码 0  -- rc=0 0.15s json={"kind": "verify", "ok": true, "sha256_hex": "09ee3a09496e8e898703cc9878668d375e5ce8cf4c8ada83da63361d44a3c3a2"}
+  [PASS] doc-256k-1pct-blocks: verify 回显 sha256_hex == 输入  -- 09ee3a09496e8e898703cc9878668d375e5ce8cf4c8ada83da63361d44a3c3a2 vs 09ee3a09496e8e898703cc9878668d375e5ce8cf4c8ada83da63361d44a3c3a2
+  [ADV-OK] doc-256k-1pct-blocks: verify 不匹配的合法 SHA-256 -> 明确否定（ok:false 或 error），不能假成功  -- rc=0 0.13s json={"kind": "verify", "ok": false, "sha256_hex": "09ee3a09496e8e898703cc9878668d375e5ce8cf4c8ada83da63361d44a3c3a2"} | 走 verify/ok=false 分支（§8.1 只规定「参数错误」用 error JSON，校验不匹配算业务结果，可接受；建议在文档中明确）
+  [ADV-OK] doc-256k-1pct-blocks: verify 不匹配时的退出码语义（advisory：error→非零 或 ok=false→0 均可）  -- rc=0 0.13s json={"kind": "verify", "ok": false, "sha256_hex": "09ee3a09496e8e898703cc9878668d375e5ce8cf4c8ada83da63361d44a3c3a2"}
+
+## cli-malformed
+  [PASS] apply 旧<=>截断 delta -> error JSON + 非零退出码 + 无 panic  -- rc=1 0.11s json={"kind": "error", "code": "format_error", "message": "truncated input at byte 10333"}
+  [PASS] apply 旧<=>空 delta -> error JSON + 非零退出码 + 无 panic  -- rc=1 0.11s json={"kind": "error", "code": "format_error", "message": "truncated input at byte 0"}
+  [PASS] apply 旧<=>错 magic delta -> error JSON + 非零退出码 + 无 panic  -- rc=1 0.16s json={"kind": "error", "code": "format_error", "message": "bad magic: expected DSIG, found DDLX"}
+  [PASS] apply 旧<=>版本 2 delta -> error JSON + 非零退出码 + 无 panic  -- rc=1 0.20s json={"kind": "error", "code": "format_error", "message": "unsupported format version: 2"}
+  [PASS] apply 旧<=>strong_len 12 delta -> error JSON + 非零退出码 + 无 panic  -- rc=1 0.12s json={"kind": "error", "code": "format_error", "message": "invalid field: strong_len must be 8 or 16, got 12"}
+  [PASS] apply 旧<=>超大 op_count -> error JSON + 非零退出码 + 无 panic  -- rc=1 0.13s json={"kind": "error", "code": "format_error", "message": "invalid field: delta has 10295 trailing bytes"}
+  [PASS] apply 旧<=>op_count 偏大 -> error JSON + 非零退出码 + 无 panic  -- rc=1 0.12s json={"kind": "error", "code": "format_error", "message": "truncated input at byte 10349"}
+  [PASS] apply 旧<=>非法 op tag -> error JSON + 非零退出码 + 无 panic  -- rc=1 0.12s json={"kind": "error", "code": "format_error", "message": "unsupported delta op tag: 7"}
+  [PASS] apply 旧<=>超大 literal 长度 -> error JSON + 非零退出码 + 无 panic  -- rc=1 0.12s json={"kind": "error", "code": "format_error", "message": "truncated input at byte 59"}
+  [PASS] apply 旧<=>COPY 块号越界 -> error JSON + 非零退出码 + 无 panic  -- rc=1 0.11s json={"kind": "error", "code": "format_error", "message": "invalid field: copy refers to block -1 but the old data has 8 blocks"}
+  [PASS] apply 旧<=>超大 COPY_RUN count -> error JSON + 非零退出码 + 无 panic  -- rc=1 0.13s json={"kind": "error", "code": "format_error", "message": "invalid field: copy run at block 0 has no blocks"}
+  [PASS] apply 旧<=>超大 new_length -> error JSON + 非零退出码 + 无 panic  -- rc=1 0.13s json={"kind": "error", "code": "format_error", "message": "value out of range: new_length 18446744073709551615 exceeds the supported range"}
+  [PASS] apply 旧<=>block_size=0 -> error JSON + 非零退出码 + 无 panic  -- rc=1 0.12s json={"kind": "error", "code": "format_error", "message": "value out of range: block_size 0 outside the supported range"}
+  [PASS] apply 旧<=>block_size 超 §4.1 上界 -> error JSON + 非零退出码 + 无 panic  -- rc=1 0.11s json={"kind": "error", "code": "format_error", "message": "value out of range: block_size 1048577 outside the supported range"}
+  [PASS] 篡改 delta 内 COPY 强校验 -> apply 必须报错（§5.2/§7.4）  -- code='format_error' rc=1 0.15s json={"kind": "error", "code": "format_error", "message": "block 0 does not match the signature"}
+  [ADV-OK] 篡改强校验的 error.code 含 BlockMismatch 语义  -- code='format_error' rc=1 0.15s json={"kind": "error", "code": "format_error", "message": "block 0 does not match the signature"}
+  [PASS] 篡改 content_digest -> apply 必须报错（§5.2 DigestMismatch）  -- code='format_error' rc=1 0.13s json={"kind": "error", "code": "format_error", "message": "the rebuilt bytes do not match the digest the delta carries"}
+  [PASS] 旧数据被替换（COPY 内容不符）-> apply 必须报错（§7.4）  -- rc=1 0.11s json={"kind": "error", "code": "format_error", "message": "block 0 does not match the signature"}
+  [PASS] 翻转 LITERAL 内 1 字节 -> apply 必须报错（§7.4 + §5.2 content_digest）  -- code='format_error' rc=1 0.21s json={"kind": "error", "code": "format_error", "message": "the rebuilt bytes do not match the digest the delta carries"}
+  [PASS] 未知命令 -> error JSON + 非零退出码 + 无 panic  -- rc=1 0.12s json={"kind": "error", "code": "usage", "message": "unknown command: __no_such_command__"}
+  [PASS] sign 缺参数 -> error JSON + 非零退出码 + 无 panic  -- rc=1 0.11s json={"kind": "error", "code": "usage", "message": "usage: moon-deltasync <sign|delta|apply|chunk|verify> ...\n  sign   <path>\n  delta  <old> <new> [--out <delta-file>]\n  apply  <old> <delta> [--out <file>]\n  chunk  <path>\n  verify <path> <sha256-hex>"}
+  [PASS] sign 文件不存在 -> error JSON + 非零退出码 + 无 panic  -- rc=1 0.17s json={"kind": "error", "code": "read_failed", "message": "cannot read C:\\Temp\\deltasync-verify-n65sfbap\\does-not-exist.bin"}
+  [PASS] delta 缺 new -> error JSON + 非零退出码 + 无 panic  -- rc=1 0.11s json={"kind": "error", "code": "usage", "message": "usage: moon-deltasync <sign|delta|apply|chunk|verify> ...\n  sign   <path>\n  delta  <old> <new> [--out <delta-file>]\n  apply  <old> <delta> [--out <file>]\n  chunk  <path>\n  verify <path> <sha256-hex>"}
+  [PASS] delta new 不存在 -> error JSON + 非零退出码 + 无 panic  -- rc=1 0.11s json={"kind": "error", "code": "read_failed", "message": "cannot read C:\\Temp\\deltasync-verify-n65sfbap\\nope.bin"}
+  [PASS] apply delta 不存在 -> error JSON + 非零退出码 + 无 panic  -- rc=1 0.11s json={"kind": "error", "code": "read_failed", "message": "cannot read C:\\Temp\\deltasync-verify-n65sfbap\\nope.ddlt"}
+  [PASS] verify 非十六进制 -> error JSON + 非零退出码 + 无 panic  -- rc=1 0.11s json={"kind": "error", "code": "usage", "message": "the expected digest is not hexadecimal"}
+  [PASS] verify 长度不对的 hex -> error JSON + 非零退出码 + 无 panic  -- rc=1 0.13s json={"kind": "error", "code": "usage", "message": "the expected digest must be 32 bytes (64 hex digits)"}
+  [PASS] verify 64 位非十六进制 -> error JSON + 非零退出码 + 无 panic  -- rc=1 0.17s json={"kind": "error", "code": "usage", "message": "the expected digest is not hexadecimal"}
+  [PASS] verify 多余参数 -> error JSON + 非零退出码 + 无 panic  -- rc=1 0.11s json={"kind": "error", "code": "usage", "message": "verify needs exactly <path> <sha256-hex>"}
+  [PASS] chunk 文件不存在 -> error JSON + 非零退出码 + 无 panic  -- rc=1 0.12s json={"kind": "error", "code": "read_failed", "message": "cannot read C:\\Temp\\deltasync-verify-n65sfbap\\nope.bin"}
+
+## cli-chunk-stability
+  [FAIL] §7.5 分块稳定性：DCHK 可解析  -- DCHK payload 7183 byte(s) != chunk_count*36+32 = 73760
+
+## cli-cross-backend
+  [PASS] §7.7 DSIG 字节（signature_sha256_hex） 在 js 与 wasm-gc 上一致  -- js='7ac813bbd13482df681fe96f534c31b7c6172ab8409806f4104644d8ee52aefb' wasm-gc='7ac813bbd13482df681fe96f534c31b7c6172ab8409806f4104644d8ee52aefb'
+  [PASS] §7.7 sign 数值字段（total_length/block_size/strong_len/block_count/signature_bytes） 在 js 与 wasm-gc 上一致  -- js='{"block_count": 32, "block_size": 8192, "signature_bytes": 662, "strong_len": 16, "total_length": 262144}' wasm-gc='{"block_count": 32, "block_size": 8192, "signature_bytes": 662, "strong_len": 16, "total_length": 262144}'
+  [PASS] §7.7 DDLT 落盘字节（delta --out 的 SHA-256） 在 js 与 wasm-gc 上一致  -- js='00fce9c598e849a410dfe35fa7971c14a9598a189de1eba9edec4aa28c863042' wasm-gc='00fce9c598e849a410dfe35fa7971c14a9598a189de1eba9edec4aa28c863042'
+  [PASS] §7.7 chunk root_hex 在 js 与 wasm-gc 上一致  -- js='11c8e2bbb50aad53ef055d5038f057afacf8e39a99ebbd86974d116a6b3acc73' wasm-gc='11c8e2bbb50aad53ef055d5038f057afacf8e39a99ebbd86974d116a6b3acc73'
+  [PASS] §7.7 chunk 数值字段（length/chunk_count） 在 js 与 wasm-gc 上一致  -- js='{"chunk_count": 53, "length": 264144}' wasm-gc='{"chunk_count": 53, "length": 264144}'
+  [PASS] §7.7 apply 重建结果 SHA-256 在 js 与 wasm-gc 上一致  -- js='8448e0dbb809dbcfade5e2bf59d2e727e5cc450774a95b983d90ef508bfb5ef9' wasm-gc='8448e0dbb809dbcfade5e2bf59d2e727e5cc450774a95b983d90ef508bfb5ef9'
+  [PASS] 跨后端互操作：js 的 DDLT 在 wasm-gc 上重建 == new  -- rc=0 0.22s json={"kind": "apply", "ok": true, "bytes_written": 264144, "blocks_verified": 29, "ops_applied": 5, "sha256_hex": "8448e0dbb809dbcfade5e2bf59d2e727e5cc450774a95b983d90ef508bfb5ef9"}
+
 设计文档歧义（本校验器实际采用的解释）
 ------------------------------------------------------------------------------
   * A1 §6.3 滑窗对象：原文「在旧数据长度上滑动窗口」与 §7.1「apply(old,delta)==new」矛盾（在旧数据上滑窗无法产出覆盖 new 的 op 序列）。本校验器按经典 rsync 语义在**新数据**上滑窗并反查旧块签名表；若实现真在旧数据上滑窗，§7.1 的重建一致性断言会直接失败。
@@ -132,4 +891,114 @@ node             : v25.2.1
 
 CLI 调用记录（时间 / 退出码 / 参数）
 ------------------------------------------------------------------------------
-  共 0 次调用
+  共 110 次调用
+    0.13s rc=1    [js] __cli_probe_no_such_command__
+    0.14s rc=0    [js] sign C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.old --out C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.dsig
+    0.18s rc=0    [js] delta C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.old C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.new --out C:\Temp\deltasync-verify-n65sfba
+    0.18s rc=0    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.old C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.ddlt --out C:\Temp\deltasync-verify-n65sfb
+    0.15s rc=0    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.old C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.ref.ddlt --out C:\Temp\deltasync-verify-n6
+    0.18s rc=0    [js] chunk C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.new
+    0.14s rc=0    [js] chunk C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.new --out C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.dchk
+    0.12s rc=0    [js] verify C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.new 9443596a39fd87d2b69372b1af7c1f8077a6b2f515dbc0d60433d9145239541a
+    0.12s rc=0    [js] verify C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.new 0000000000000000000000000000000000000000000000000000000000000000
+    0.17s rc=0    [js] sign C:\Temp\deltasync-verify-n65sfbap\doc-256k-mixed.old --out C:\Temp\deltasync-verify-n65sfbap\doc-256k-mixed.dsig
+    0.17s rc=0    [js] delta C:\Temp\deltasync-verify-n65sfbap\doc-256k-mixed.old C:\Temp\deltasync-verify-n65sfbap\doc-256k-mixed.new --out C:\Temp\deltasync-verify-n65sfba
+    0.16s rc=0    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-256k-mixed.old C:\Temp\deltasync-verify-n65sfbap\doc-256k-mixed.ddlt --out C:\Temp\deltasync-verify-n65sfb
+    0.17s rc=0    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-256k-mixed.old C:\Temp\deltasync-verify-n65sfbap\doc-256k-mixed.ref.ddlt --out C:\Temp\deltasync-verify-n6
+    0.17s rc=0    [js] chunk C:\Temp\deltasync-verify-n65sfbap\doc-256k-mixed.new
+    0.19s rc=0    [js] chunk C:\Temp\deltasync-verify-n65sfbap\doc-256k-mixed.new --out C:\Temp\deltasync-verify-n65sfbap\doc-256k-mixed.dchk
+    0.13s rc=0    [js] verify C:\Temp\deltasync-verify-n65sfbap\doc-256k-mixed.new 8448e0dbb809dbcfade5e2bf59d2e727e5cc450774a95b983d90ef508bfb5ef9
+    0.22s rc=0    [js] verify C:\Temp\deltasync-verify-n65sfbap\doc-256k-mixed.new 0000000000000000000000000000000000000000000000000000000000000000
+    0.23s rc=0    [js] sign C:\Temp\deltasync-verify-n65sfbap\doc-1m-move.old --out C:\Temp\deltasync-verify-n65sfbap\doc-1m-move.dsig
+    0.25s rc=0    [js] delta C:\Temp\deltasync-verify-n65sfbap\doc-1m-move.old C:\Temp\deltasync-verify-n65sfbap\doc-1m-move.new --out C:\Temp\deltasync-verify-n65sfbap\doc-
+    0.25s rc=0    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-1m-move.old C:\Temp\deltasync-verify-n65sfbap\doc-1m-move.ddlt --out C:\Temp\deltasync-verify-n65sfbap\doc
+    0.22s rc=0    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-1m-move.old C:\Temp\deltasync-verify-n65sfbap\doc-1m-move.ref.ddlt --out C:\Temp\deltasync-verify-n65sfbap
+    0.30s rc=0    [js] chunk C:\Temp\deltasync-verify-n65sfbap\doc-1m-move.new
+    0.24s rc=0    [js] chunk C:\Temp\deltasync-verify-n65sfbap\doc-1m-move.new --out C:\Temp\deltasync-verify-n65sfbap\doc-1m-move.dchk
+    0.15s rc=0    [js] verify C:\Temp\deltasync-verify-n65sfbap\doc-1m-move.new 36798846d5ecf981c53f31ad9a901675bb368a59e43594dabeaf72f4fc7c6a52
+    0.16s rc=0    [js] verify C:\Temp\deltasync-verify-n65sfbap\doc-1m-move.new 0000000000000000000000000000000000000000000000000000000000000000
+    0.38s rc=0    [js] sign C:\Temp\deltasync-verify-n65sfbap\doc-2m-mixed.old --out C:\Temp\deltasync-verify-n65sfbap\doc-2m-mixed.dsig
+    0.39s rc=0    [js] delta C:\Temp\deltasync-verify-n65sfbap\doc-2m-mixed.old C:\Temp\deltasync-verify-n65sfbap\doc-2m-mixed.new --out C:\Temp\deltasync-verify-n65sfbap\do
+    0.31s rc=0    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-2m-mixed.old C:\Temp\deltasync-verify-n65sfbap\doc-2m-mixed.ddlt --out C:\Temp\deltasync-verify-n65sfbap\d
+    0.31s rc=0    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-2m-mixed.old C:\Temp\deltasync-verify-n65sfbap\doc-2m-mixed.ref.ddlt --out C:\Temp\deltasync-verify-n65sfb
+    0.36s rc=0    [js] chunk C:\Temp\deltasync-verify-n65sfbap\doc-2m-mixed.new
+    0.35s rc=0    [js] chunk C:\Temp\deltasync-verify-n65sfbap\doc-2m-mixed.new --out C:\Temp\deltasync-verify-n65sfbap\doc-2m-mixed.dchk
+    0.17s rc=0    [js] verify C:\Temp\deltasync-verify-n65sfbap\doc-2m-mixed.new 30d2cd2b14c360b9bdf8c8542dabf495f3dc3c5bc001c80f407dbd41b144d57e
+    0.17s rc=0    [js] verify C:\Temp\deltasync-verify-n65sfbap\doc-2m-mixed.new 0000000000000000000000000000000000000000000000000000000000000000
+    0.15s rc=0    [js] sign C:\Temp\deltasync-verify-n65sfbap\doc-64k-identical.old --out C:\Temp\deltasync-verify-n65sfbap\doc-64k-identical.dsig
+    0.14s rc=0    [js] delta C:\Temp\deltasync-verify-n65sfbap\doc-64k-identical.old C:\Temp\deltasync-verify-n65sfbap\doc-64k-identical.new --out C:\Temp\deltasync-verify-n
+    0.16s rc=0    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-64k-identical.old C:\Temp\deltasync-verify-n65sfbap\doc-64k-identical.ddlt --out C:\Temp\deltasync-verify-
+    0.15s rc=0    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-64k-identical.old C:\Temp\deltasync-verify-n65sfbap\doc-64k-identical.ref.ddlt --out C:\Temp\deltasync-ver
+    0.17s rc=0    [js] chunk C:\Temp\deltasync-verify-n65sfbap\doc-64k-identical.new
+    0.15s rc=0    [js] chunk C:\Temp\deltasync-verify-n65sfbap\doc-64k-identical.new --out C:\Temp\deltasync-verify-n65sfbap\doc-64k-identical.dchk
+    0.12s rc=0    [js] verify C:\Temp\deltasync-verify-n65sfbap\doc-64k-identical.new 11733188137912662ba6a160bf13bfb714739df487c08a0a595c410b2e7049e0
+    0.13s rc=0    [js] verify C:\Temp\deltasync-verify-n65sfbap\doc-64k-identical.new 0000000000000000000000000000000000000000000000000000000000000000
+    0.21s rc=0    [js] sign C:\Temp\deltasync-verify-n65sfbap\doc-64k-allnew.old --out C:\Temp\deltasync-verify-n65sfbap\doc-64k-allnew.dsig
+    0.17s rc=0    [js] delta C:\Temp\deltasync-verify-n65sfbap\doc-64k-allnew.old C:\Temp\deltasync-verify-n65sfbap\doc-64k-allnew.new --out C:\Temp\deltasync-verify-n65sfba
+    0.13s rc=0    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-64k-allnew.old C:\Temp\deltasync-verify-n65sfbap\doc-64k-allnew.ddlt --out C:\Temp\deltasync-verify-n65sfb
+    0.13s rc=0    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-64k-allnew.old C:\Temp\deltasync-verify-n65sfbap\doc-64k-allnew.ref.ddlt --out C:\Temp\deltasync-verify-n6
+    0.17s rc=0    [js] chunk C:\Temp\deltasync-verify-n65sfbap\doc-64k-allnew.new
+    0.14s rc=0    [js] chunk C:\Temp\deltasync-verify-n65sfbap\doc-64k-allnew.new --out C:\Temp\deltasync-verify-n65sfbap\doc-64k-allnew.dchk
+    0.15s rc=0    [js] verify C:\Temp\deltasync-verify-n65sfbap\doc-64k-allnew.new 1ddb6c3be841df44c02bfdd62e17f773f37934e4bfa3f15a19fcb6eb8d294e48
+    0.12s rc=0    [js] verify C:\Temp\deltasync-verify-n65sfbap\doc-64k-allnew.new 0000000000000000000000000000000000000000000000000000000000000000
+    0.16s rc=0    [js] sign C:\Temp\deltasync-verify-n65sfbap\doc-256k-1pct-blocks.old --out C:\Temp\deltasync-verify-n65sfbap\doc-256k-1pct-blocks.dsig
+    0.17s rc=0    [js] delta C:\Temp\deltasync-verify-n65sfbap\doc-256k-1pct-blocks.old C:\Temp\deltasync-verify-n65sfbap\doc-256k-1pct-blocks.new --out C:\Temp\deltasync-ve
+    0.16s rc=0    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-256k-1pct-blocks.old C:\Temp\deltasync-verify-n65sfbap\doc-256k-1pct-blocks.ddlt --out C:\Temp\deltasync-v
+    0.18s rc=0    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-256k-1pct-blocks.old C:\Temp\deltasync-verify-n65sfbap\doc-256k-1pct-blocks.ref.ddlt --out C:\Temp\deltasy
+    0.23s rc=0    [js] chunk C:\Temp\deltasync-verify-n65sfbap\doc-256k-1pct-blocks.new
+    0.17s rc=0    [js] chunk C:\Temp\deltasync-verify-n65sfbap\doc-256k-1pct-blocks.new --out C:\Temp\deltasync-verify-n65sfbap\doc-256k-1pct-blocks.dchk
+    0.15s rc=0    [js] verify C:\Temp\deltasync-verify-n65sfbap\doc-256k-1pct-blocks.new 09ee3a09496e8e898703cc9878668d375e5ce8cf4c8ada83da63361d44a3c3a2
+    0.13s rc=0    [js] verify C:\Temp\deltasync-verify-n65sfbap\doc-256k-1pct-blocks.new 0000000000000000000000000000000000000000000000000000000000000000
+    0.11s rc=0    [js] sign C:\Temp\deltasync-verify-n65sfbap\tiny-empty.old --out C:\Temp\deltasync-verify-n65sfbap\tiny-empty.dsig
+    0.12s rc=0    [js] delta C:\Temp\deltasync-verify-n65sfbap\tiny-empty.old C:\Temp\deltasync-verify-n65sfbap\tiny-empty.new --out C:\Temp\deltasync-verify-n65sfbap\tiny-e
+    0.12s rc=0    [js] apply C:\Temp\deltasync-verify-n65sfbap\tiny-empty.old C:\Temp\deltasync-verify-n65sfbap\tiny-empty.ddlt --out C:\Temp\deltasync-verify-n65sfbap\tiny-
+    0.11s rc=0    [js] apply C:\Temp\deltasync-verify-n65sfbap\tiny-empty.old C:\Temp\deltasync-verify-n65sfbap\tiny-empty.ref.ddlt --out C:\Temp\deltasync-verify-n65sfbap\t
+    0.12s rc=0    [js] sign C:\Temp\deltasync-verify-n65sfbap\tiny-1.old --out C:\Temp\deltasync-verify-n65sfbap\tiny-1.dsig
+    0.11s rc=0    [js] delta C:\Temp\deltasync-verify-n65sfbap\tiny-1.old C:\Temp\deltasync-verify-n65sfbap\tiny-1.new --out C:\Temp\deltasync-verify-n65sfbap\tiny-1.ddlt
+    0.14s rc=0    [js] apply C:\Temp\deltasync-verify-n65sfbap\tiny-1.old C:\Temp\deltasync-verify-n65sfbap\tiny-1.ddlt --out C:\Temp\deltasync-verify-n65sfbap\tiny-1.rebuil
+    0.17s rc=0    [js] apply C:\Temp\deltasync-verify-n65sfbap\tiny-1.old C:\Temp\deltasync-verify-n65sfbap\tiny-1.ref.ddlt --out C:\Temp\deltasync-verify-n65sfbap\tiny-1.re
+    0.13s rc=0    [js] sign C:\Temp\deltasync-verify-n65sfbap\tiny-100.old --out C:\Temp\deltasync-verify-n65sfbap\tiny-100.dsig
+    0.12s rc=0    [js] delta C:\Temp\deltasync-verify-n65sfbap\tiny-100.old C:\Temp\deltasync-verify-n65sfbap\tiny-100.new --out C:\Temp\deltasync-verify-n65sfbap\tiny-100.d
+    0.11s rc=0    [js] apply C:\Temp\deltasync-verify-n65sfbap\tiny-100.old C:\Temp\deltasync-verify-n65sfbap\tiny-100.ddlt --out C:\Temp\deltasync-verify-n65sfbap\tiny-100.
+    0.13s rc=0    [js] apply C:\Temp\deltasync-verify-n65sfbap\tiny-100.old C:\Temp\deltasync-verify-n65sfbap\tiny-100.ref.ddlt --out C:\Temp\deltasync-verify-n65sfbap\tiny-
+    0.11s rc=1    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.old C:\Temp\deltasync-verify-n65sfbap\bad_50431327_doc-64k-insert.ddlt
+    0.11s rc=1    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.old C:\Temp\deltasync-verify-n65sfbap\bad_51216381_doc-64k-insert.ddlt
+    0.16s rc=1    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.old C:\Temp\deltasync-verify-n65sfbap\bad_14276061_doc-64k-insert.ddlt
+    0.20s rc=1    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.old C:\Temp\deltasync-verify-n65sfbap\bad_38300876_doc-64k-insert.ddlt
+    0.12s rc=1    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.old C:\Temp\deltasync-verify-n65sfbap\bad_52802388_doc-64k-insert.ddlt
+    0.13s rc=1    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.old C:\Temp\deltasync-verify-n65sfbap\bad_79531804_doc-64k-insert.ddlt
+    0.12s rc=1    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.old C:\Temp\deltasync-verify-n65sfbap\bad_29246366_doc-64k-insert.ddlt
+    0.12s rc=1    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.old C:\Temp\deltasync-verify-n65sfbap\bad_23883535_doc-64k-insert.ddlt
+    0.12s rc=1    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.old C:\Temp\deltasync-verify-n65sfbap\bad_34700496_doc-64k-insert.ddlt
+    0.11s rc=1    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.old C:\Temp\deltasync-verify-n65sfbap\bad_31948455_doc-64k-insert.ddlt
+    0.13s rc=1    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.old C:\Temp\deltasync-verify-n65sfbap\bad_82971594_doc-64k-insert.ddlt
+    0.13s rc=1    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.old C:\Temp\deltasync-verify-n65sfbap\bad_72994244_doc-64k-insert.ddlt
+    0.12s rc=1    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.old C:\Temp\deltasync-verify-n65sfbap\bad_84869914_doc-64k-insert.ddlt
+    0.11s rc=1    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.old C:\Temp\deltasync-verify-n65sfbap\bad_86105224_doc-64k-insert.ddlt
+    0.15s rc=1    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.old C:\Temp\deltasync-verify-n65sfbap\tamper_strong_624108_doc-64k-insert.ddlt
+    0.13s rc=1    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.old C:\Temp\deltasync-verify-n65sfbap\tamper_digest_240271_doc-64k-insert.ddlt
+    0.11s rc=1    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.badold C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.ddlt --out C:\Temp\deltasync-verify-n65
+    0.21s rc=1    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.old C:\Temp\deltasync-verify-n65sfbap\flip_literal_138613_doc-64k-insert.ddlt
+    0.12s rc=1    [js] __no_such_command__
+    0.11s rc=1    [js] sign
+    0.17s rc=1    [js] sign C:\Temp\deltasync-verify-n65sfbap\does-not-exist.bin
+    0.11s rc=1    [js] delta C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.old
+    0.11s rc=1    [js] delta C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.old C:\Temp\deltasync-verify-n65sfbap\nope.bin
+    0.11s rc=1    [js] apply C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.old C:\Temp\deltasync-verify-n65sfbap\nope.ddlt
+    0.11s rc=1    [js] verify C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.new zzzz
+    0.13s rc=1    [js] verify C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.new abcd
+    0.17s rc=1    [js] verify C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.new zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz
+    0.11s rc=1    [js] verify C:\Temp\deltasync-verify-n65sfbap\doc-64k-insert.new 9443596a39fd87d2b69372b1af7c1f8077a6b2f515dbc0d60433d9145239541a extra
+    0.12s rc=1    [js] chunk C:\Temp\deltasync-verify-n65sfbap\nope.bin
+    0.31s rc=0    [js] chunk C:\Temp\deltasync-verify-n65sfbap\cdc-base.bin --out C:\Temp\deltasync-verify-n65sfbap\cdc-base.dchk
+    0.26s rc=0    [js] chunk C:\Temp\deltasync-verify-n65sfbap\cdc-prefixed.bin --out C:\Temp\deltasync-verify-n65sfbap\cdc-prefixed.dchk
+    0.16s rc=0    [js] sign C:\Temp\deltasync-verify-n65sfbap\xbe.old
+    0.20s rc=0    [js] delta C:\Temp\deltasync-verify-n65sfbap\xbe.old C:\Temp\deltasync-verify-n65sfbap\xbe.new --out C:\Temp\deltasync-verify-n65sfbap\xbe.js.ddlt
+    0.18s rc=0    [js] chunk C:\Temp\deltasync-verify-n65sfbap\xbe.new
+    0.15s rc=0    [js] apply C:\Temp\deltasync-verify-n65sfbap\xbe.old C:\Temp\deltasync-verify-n65sfbap\xbe.js.ddlt --out C:\Temp\deltasync-verify-n65sfbap\xbe.js.out
+    0.35s rc=0    [wasm-gc] __no_such_command__
+    0.18s rc=0    [wasm-gc] sign C:\Temp\deltasync-verify-n65sfbap\xbe.old
+    0.30s rc=0    [wasm-gc] delta C:\Temp\deltasync-verify-n65sfbap\xbe.old C:\Temp\deltasync-verify-n65sfbap\xbe.new --out C:\Temp\deltasync-verify-n65sfbap\xbe.wasm-gc.ddlt
+    0.18s rc=0    [wasm-gc] chunk C:\Temp\deltasync-verify-n65sfbap\xbe.new
+    0.25s rc=0    [wasm-gc] apply C:\Temp\deltasync-verify-n65sfbap\xbe.old C:\Temp\deltasync-verify-n65sfbap\xbe.wasm-gc.ddlt --out C:\Temp\deltasync-verify-n65sfbap\xbe.wasm-gc
+    0.22s rc=0    [wasm-gc] apply C:\Temp\deltasync-verify-n65sfbap\xbe.old C:\Temp\deltasync-verify-n65sfbap\xbe.js.ddlt --out C:\Temp\deltasync-verify-n65sfbap\xbe.cross.out

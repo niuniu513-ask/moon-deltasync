@@ -28,9 +28,8 @@
 | 文件 | 职责 |
 | --- | --- |
 | `foundation.mbt` | 字节工具：小端/大端整数读写、varint、hex 编解码、字节比较 |
-| `hash.mbt` | SHA-256（全流与分块）、XXH64（快速指纹）、Adler-32 风格弱校验、常量时间比较 |
-| `rolling.mbt` | 滑动窗口弱校验的增量更新（加入/移出字节） |
-| `signature.mbt` | 块签名构建、序列化/反序列化、按弱校验分桶的查找索引 |
+| `hash.mbt` | SHA-256（全流与分块）、XXH64（快速指纹）、Adler-32 风格弱校验与滑动更新 `WeakRoll`、常量时间比较 |
+| `signature.mbt` | 块签名构建、序列化/反序列化、格式错误类型 |
 | `delta.mbt` | delta 生成、序列化/反序列化、应用与逐块校验 |
 | `chunk.mbt` | 内容定义分块（gear hash）、manifest、去重块存储 |
 | `sync.mbt` | 三个工作流的高层封装与统计 |
@@ -73,7 +72,7 @@ pub struct ChunkManifest {
 }
 ```
 
-错误统一用 `pub suberror FormatError`（构造子：`BadMagic` / `UnsupportedVersion` / `Truncated` / `BadField` / `TooLarge` / `BlockMismatch` / `UnsupportedOp`），**不允许 panic 出现在公开 API 上**：损坏的输入必须变成诊断信息。
+错误统一用 `pub suberror FormatError`（8 个构造子：`BadMagic` / `UnsupportedVersion` / `Truncated` / `BadField` / `TooLarge` / `BlockMismatch` / `UnsupportedOp` / `DigestMismatch`），**不允许 panic 出现在公开 API 上**：损坏的输入必须变成诊断信息。
 
 ### 4.1 块大小与规模上界（实现即契约）
 
@@ -120,10 +119,14 @@ repeat op_count 次:
 ### 5.3 manifest `DCHK` v1
 
 ```
-"DCHK"(4) version:u8=1 chunk_count:u32
-repeat chunk_count 次: sha256:u8[32] length:u32
+"DCHK"(4) version:u8=1 min_size:u32 max_size:u32 mask_bits:u8 chunk_count:u32
+repeat chunk_count 次: sha256:u8[32] length:varint
 root:u8[32]    // = SHA-256(concat(每个块的 32 字节 sha256))
 ```
+
+- 分块参数随 manifest 一起存储，重建时用同一组参数重新分块，`verify` 才有意义。
+- 块长用无符号 LEB128 `varint` 编码：小块的 manifest 更短；解析时最多 10 字节，超出即 `Truncated`。
+- 解析后必须重算 `root` 并与尾部 32 字节比较，不一致即 `BadField`。
 
 ## 6. 算法
 
@@ -132,8 +135,8 @@ root:u8[32]    // = SHA-256(concat(每个块的 32 字节 sha256))
 对窗口 `w[0..n)`：
 
 ```
-a = Σ w[i]        (mod 65521)
-b = Σ (n - i) * w[i]  (mod 65521)
+a = 1 + Σ w[i]                          (mod 65521)
+b = n + Σ (n - i) * w[i]                (mod 65521)   // 即每个前缀 a 的累加
 weak = (b << 16) | a
 ```
 
@@ -141,7 +144,7 @@ weak = (b << 16) | a
 
 ```
 a' = a - out + in
-b' = b - n * out + a
+b' = b - n * out + a' - 1     // 常数 1 每移动一位就给 b 多贡献 1，故减 1
 ```
 
 ### 6.2 强校验
