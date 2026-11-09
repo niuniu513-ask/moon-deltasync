@@ -1,0 +1,13 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "niuniu513-ask/moon-deltasync/cmd/main"
+
+// Values
+
+// Errors
+type CliError
+
+// Types and methods
+
+// Type aliases
+
+// Traits
