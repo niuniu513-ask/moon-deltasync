@@ -76,14 +76,14 @@ pub fn Delta::copy_ops(self : Delta) -> Int32 {
 
 ///|
 /// The number of operations in the delta.
-pub fn Delta::op_count(self : Delta) -> Int {
+pub fn Delta::op_count(self : Delta) -> Int32 {
   self.ops.length()
 }
 
 ///|
 /// The number of blocks the delta copies from the old data, counting a run as
 /// its length rather than as one operation.
-pub fn Delta::copied_blocks(self : Delta) -> Int {
+pub fn Delta::copied_blocks(self : Delta) -> Int32 {
   let mut total = 0
   for op in self.ops {
     match op {

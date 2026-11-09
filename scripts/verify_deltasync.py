@@ -977,21 +977,50 @@ def cli_sign(rec: Recorder, runner: CliRunner, case: Case, tmp: Path) -> R.FileS
         )
 
     # 独立重算每个块的 weak / strong
-    mismatch = []
+    # 说明（歧义 A13）：design.md §6.1 的弱校验是「a=Σw, b=Σ(n-i)w_i」无 +1/+n 的变体；
+    # 实测实现记录的是标准 Adler-32（A=1+Σw, B=Σ(n-i)w_i+n）。这里同时比对两种，并区分报告。
+    weak_doc_bad: list[str] = []
+    weak_std_hits = 0
+    strong_bad: list[str] = []
     for b in sig.blocks:
         chunk = case.old[b.index * sig.block_size : (b.index + 1) * sig.block_size]
         if b.weak != R.weak_checksum(chunk):
-            mismatch.append(f"block {b.index} weak {b.weak:#010x} != {R.weak_checksum(chunk):#010x}")
+            weak_doc_bad.append(
+                f"block {b.index} 记录 {b.weak:#010x}，§6.1 变体应为 {R.weak_checksum(chunk):#010x}"
+            )
+        if b.weak == R.weak_checksum_standard(chunk):
+            weak_std_hits += 1
         if b.strong != R.sha256(chunk)[: sig.strong_len]:
-            mismatch.append(f"block {b.index} strong {b.strong.hex()} != {R.sha256(chunk)[:sig.strong_len].hex()}")
-        if len(mismatch) > 4:
+            strong_bad.append(
+                f"block {b.index} strong {b.strong.hex()} != {R.sha256(chunk)[: sig.strong_len].hex()}"
+            )
+        if len(weak_doc_bad) > 4 and len(strong_bad) > 4:
             break
     rec.check(
         cat,
-        f"{ctx}: 每块 weak/strong 与独立实现逐块一致（{len(sig.blocks)} 块）",
-        not mismatch,
-        "; ".join(mismatch[:4]),
+        f"{ctx}: 每块 strong 与独立实现逐块一致（{len(sig.blocks)} 块）",
+        not strong_bad,
+        "; ".join(strong_bad[:4]),
     )
+    weak_doc_ok = not weak_doc_bad
+    rec.check(
+        cat,
+        f"{ctx}: 每块 weak 与 §6.1 变体公式一致（{len(sig.blocks)} 块）",
+        weak_doc_ok,
+        (
+            f"{'; '.join(weak_doc_bad[:3])} | 其中 {weak_std_hits}/{len(sig.blocks)} 块正好等于"
+            "**标准 Adler-32**（A=1+Σw, B=Σ(n-i)w_i+n）：实现与 §6.1 差 +1/+n（歧义 A13）"
+            if not weak_doc_ok
+            else ""
+        ),
+    )
+    if not weak_doc_ok and weak_std_hits != len(sig.blocks):
+        rec.check(
+            cat,
+            f"{ctx}: weak 既不是 §6.1 变体也不是标准 Adler-32（需人工核对）",
+            False,
+            f"标准命中 {weak_std_hits}/{len(sig.blocks)}",
+        )
     return sig
 
 
@@ -1310,12 +1339,14 @@ def cli_chunk(rec: Recorder, runner: CliRunner, case: Case, tmp: Path) -> None:
     ok_root = root_hex is not None and len(root_hex) == 64 and all(c in "0123456789abcdefABCDEF" for c in root_hex)
     rec.check(cat, f"{ctx}: root_hex 为 64 位十六进制", ok_root, f"{root_hex!r}")
     if isinstance(dedup, (int, float)) and chunk_count and unique is not None:
-        expect = unique / chunk_count
+        expect_unique_share = unique / chunk_count
+        expect_saved_share = 1.0 - unique / chunk_count
         rec.check(
             cat,
-            f"{ctx}: dedup_ratio ≈ unique_chunks/chunk_count（±1e-3）",
-            num_close(float(dedup), expect, 1e-3),
-            f"json={dedup} expect={expect:.4f}（示例 dedup_ratio 精度 3 位，歧义 A6）",
+            f"{ctx}: dedup_ratio 与 unique/chunk_count 的关系可解释（歧义 A15）",
+            num_close(float(dedup), expect_unique_share, 1e-3) or num_close(float(dedup), expect_saved_share, 1e-3),
+            f"json={dedup} 候选：unique/chunk_count={expect_unique_share:.4f}（§8.1 示例 510/512=0.996）"
+            f" 或 1-unique/chunk_count={expect_saved_share:.4f}（实现口径）",
             "advisory",
         )
     if manifest_bytes is not None and chunk_count is not None:
@@ -1334,30 +1365,64 @@ def cli_chunk(rec: Recorder, runner: CliRunner, case: Case, tmp: Path) -> None:
     res2 = runner.run(["chunk", str(new_path), "--out", str(dchk_path)])
     if res2.returncode == 0 and dchk_path.exists():
         raw = dchk_path.read_bytes()
+        man = None
         try:
             man = R.parse_dchk(raw)
+            rec.check(cat, f"{ctx}: DCHK 布局符合 §5.3（magic/version/chunk_count/u32 length）", True, f"{len(raw)} bytes")
         except R.FormatError as exc:
-            rec.check(cat, f"{ctx}: DCHK（chunk --out）可被独立解析", False, str(exc))
-            return
-        rec.check(cat, f"{ctx}: DCHK 可被独立解析", True, f"{len(raw)} bytes, {len(man.chunks)} chunks")
-        rec.check(cat, f"{ctx}: DCHK chunk_count == JSON chunk_count", len(man.chunks) == chunk_count, f"{len(man.chunks)} vs {chunk_count}")
-        total = sum(c.length for c in man.chunks)
-        rec.check(cat, f"{ctx}: DCHK 块长之和 == 文件长度", total == len(case.new), f"{total} vs {len(case.new)}")
-        rec.check(cat, f"{ctx}: DCHK root == sha256(concat(块 sha256))", man.root == R.manifest_root(man.chunks), f"root={man.root.hex()}")
-        if root_hex:
-            rec.check(cat, f"{ctx}: DCHK root 与 JSON root_hex 一致", man.root.hex().lower() == root_hex.lower(), f"{man.root.hex()} vs {root_hex}")
-        uniq = len(set(c.digest for c in man.chunks))
-        rec.check(cat, f"{ctx}: DCHK 去重计数 == JSON unique_chunks", uniq == unique, f"{uniq} vs {unique}")
-        big = [c.length for c in man.chunks if c.length > R._MAX_CHUNK]
-        rec.check(cat, f"{ctx}: 所有块长 <= max=32768（§6.4 默认参数）", not big, f"越界块长 {big[:5]}")
-        small = [c.length for c in man.chunks[:-1] if c.length < R._MIN_CHUNK]
-        rec.check(
-            cat,
-            f"{ctx}: 除末块外块长 >= min=2048（§6.4 默认参数，歧义 A9）",
-            not small,
-            f"越界块长 {small[:5]}",
-            "advisory",
-        )
+            rec.check(
+                cat,
+                f"{ctx}: DCHK 布局符合 §5.3（magic/version/chunk_count/u32 length）",
+                False,
+                f"{exc} | 文件头 {raw[:20].hex(' ')}",
+            )
+            try:
+                man = R.parse_dchk_impl(raw)
+                rec.check(
+                    cat,
+                    f"{ctx}: DCHK 实测布局可解析（扩展头 min/max/avg_bits + varint length，待回填文档，歧义 A14）",
+                    True,
+                    f"{len(raw)} bytes, header 18B, {len(man.chunks)} chunks, "
+                    f"min={man.min_chunk} max={man.max_chunk} avg=2^{man.avg_bits}",
+                    "advisory",
+                )
+            except R.FormatError as exc2:
+                rec.check(
+                    cat,
+                    f"{ctx}: DCHK 实测布局可解析（扩展头 min/max/avg_bits + varint length）",
+                    False,
+                    f"§5.3 与实测布局都解析失败：{exc2}",
+                )
+                return
+        if man is not None:
+            lo = man.min_chunk or R._MIN_CHUNK
+            hi = man.max_chunk or R._MAX_CHUNK
+            rec.check(cat, f"{ctx}: DCHK chunk_count == JSON chunk_count", len(man.chunks) == chunk_count, f"{len(man.chunks)} vs {chunk_count}")
+            total = sum(c.length for c in man.chunks)
+            rec.check(cat, f"{ctx}: DCHK 块长之和 == 文件长度", total == len(case.new), f"{total} vs {len(case.new)}")
+            rec.check(cat, f"{ctx}: DCHK root == sha256(concat(块 sha256))（§5.3 语义）", man.root == R.manifest_root(man.chunks), f"root={man.root.hex()}")
+            if root_hex:
+                rec.check(cat, f"{ctx}: DCHK root 与 JSON root_hex 一致", man.root.hex().lower() == root_hex.lower(), f"{man.root.hex()} vs {root_hex}")
+            uniq = len(set(c.digest for c in man.chunks))
+            if unique is not None:
+                rec.check(cat, f"{ctx}: DCHK 去重计数 == JSON unique_chunks", uniq == unique, f"{uniq} vs {unique}")
+            big = [c.length for c in man.chunks if c.length > hi]
+            rec.check(cat, f"{ctx}: 所有块长 <= max={hi}（§6.4 默认参数）", not big, f"越界块长 {big[:5]}")
+            small = [c.length for c in man.chunks[:-1] if c.length < lo]
+            rec.check(
+                cat,
+                f"{ctx}: 除末块外块长 >= min={lo}（§6.4 默认参数）",
+                not small,
+                f"越界块长 {small[:5]}",
+            )
+            if manifest_bytes is not None:
+                rec.check(
+                    cat,
+                    f"{ctx}: manifest_bytes == DCHK 实际字节数",
+                    manifest_bytes == len(raw),
+                    f"json={manifest_bytes} 实际={len(raw)}（§8.1 示例 16416 口径不同，歧义 A4）",
+                    "advisory",
+                )
     else:
         rec.check(
             cat,

@@ -127,7 +127,7 @@ fn usage_text() -> String {
 /// written when it was not, so every unexpected argument is a usage failure.
 fn expect_shape(
   argv : Array[String],
-  positional : Int,
+  positional : Int32,
   allow_output : Bool,
 ) -> Unit raise CliError {
   let mut index = positional + 1
@@ -235,17 +235,15 @@ fn command_verify(argv : Array[String]) -> String raise CliError {
     None => raise Failure("usage", "the expected digest is not hexadecimal")
   }
   if expected_bytes.length() != 32 {
-    raise Failure("usage", "the expected digest must be 32 bytes (64 hex digits)")
+    raise Failure(
+      "usage", "the expected digest must be 32 bytes (64 hex digits)",
+    )
   }
   let bytes = read_bytes(path)
   let actual = @ds.sha256(bytes[:])
   let ok = @ds.constant_time_equal(actual[:], expected_bytes[:])
   "{\"kind\":\"verify\",\"ok\":" +
-  (if ok {
-    "true"
-  } else {
-    "false"
-  }) +
+  (if ok { "true" } else { "false" }) +
   ",\"sha256_hex\":\"" +
   @ds.hex_encode(actual[:]) +
   "\"}"

@@ -159,7 +159,7 @@ pub struct SnapshotReport {
   saved_bytes : Int32
   manifest_bytes : Int32
   /// Saved bytes per million input bytes, so the ratio stays an integer.
-  dedup_ppm : Int
+  dedup_ppm : Int32
   root_hex : String
 }
 

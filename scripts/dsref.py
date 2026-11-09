@@ -94,6 +94,23 @@ class RollingWeak:
         return self.value()
 
 
+def weak_checksum_standard(data: bytes) -> int:
+    """标准 Adler-32（zlib 语义）：A = 1 + Σw，B = Σ(n-i)w_i + n。
+
+    仅用于诊断「实现是否等于标准 Adler-32」；design.md §6.1 定义的是无 +1/+n 的变体，
+    但实测被测实现的 DSIG 记录的是标准 Adler-32（见报告 A13）。
+    """
+    n = len(data)
+    if n == 0:
+        return 1
+    a = 1
+    b = n
+    for i, byte in enumerate(data):
+        a += byte
+        b += (n - i) * byte
+    return (((b % MOD) & 0xFFFF) << 16) | ((a % MOD) & 0xFFFF)
+
+
 # ---------------------------------------------------------------------------
 # §6.2 XXH64（标准 xxHash64，seed = 0）
 # ---------------------------------------------------------------------------
@@ -541,12 +558,42 @@ class ChunkRef:
 
 
 class Manifest:
-    __slots__ = ("chunk_size_hint", "chunks", "root")
+    __slots__ = ("chunk_size_hint", "chunks", "root", "min_chunk", "max_chunk", "avg_bits", "layout")
 
-    def __init__(self, chunk_size_hint: int, chunks: list[ChunkRef], root: bytes):
-        self.chunk_size_hint = chunk_size_hint  # 不参与 DCHK 序列化（见 §5.3）
+    def __init__(
+        self,
+        chunk_size_hint: int,
+        chunks: list[ChunkRef],
+        root: bytes,
+        min_chunk: int = 0,
+        max_chunk: int = 0,
+        avg_bits: int = 0,
+        layout: str = "spec",
+    ):
+        self.chunk_size_hint = chunk_size_hint  # 不参与 §5.3 序列化
         self.chunks = chunks
         self.root = root
+        self.min_chunk = min_chunk
+        self.max_chunk = max_chunk
+        self.avg_bits = avg_bits
+        self.layout = layout  # "spec"（§5.3）或 "impl"（实测布局，见 A14）
+
+
+def _read_varint(buf: bytes, i: int) -> tuple[int, int]:
+    """LEB128 无符号 varint（§3 foundation.mbt 提到 varint，但 §5.3 未使用）。"""
+    value = 0
+    shift = 0
+    while True:
+        if i >= len(buf):
+            raise FormatError("truncated varint")
+        byte = buf[i]
+        i += 1
+        value |= (byte & 0x7F) << shift
+        if not byte & 0x80:
+            return value, i
+        shift += 7
+        if shift > 63:
+            raise FormatError("varint too long")
 
 
 def parse_dchk(data: bytes, chunk_size_hint: int = 0) -> Manifest:
@@ -582,6 +629,54 @@ def serialize_dchk(manifest: Manifest) -> bytes:
         out += _be32(c.length)
     out += manifest.root
     return bytes(out)
+
+
+def parse_dchk_impl(data: bytes) -> Manifest:
+    """解析**实测的被测实现布局**（不是 §5.3）：
+
+        "DCHK"(4) version:u8=1 min:u32 max:u32 avg_bits:u8 chunk_count:u32
+        repeat chunk_count 次: sha256:u8[32] length:varint
+        root:u8[32]
+
+    该布局由 2026-11-09 的 CLI 输出反推（header 18 字节 + 每条记录 32B 摘要 + varint 长度），
+    与 design.md §5.3 不一致，见报告歧义 A14。本函数只用于在「§5.3 解析失败」后继续做
+    结构性校验（root 重算、长度守恒、块长上下界、指纹复用），不改变格式契约判断。
+    """
+    r = Reader(data)
+    if r.take(4) != b"DCHK":
+        raise FormatError("bad magic, expected b'DCHK'")
+    version = r.u8()
+    if version != 1:
+        raise FormatError(f"unsupported DCHK version {version}")
+    min_chunk = r.u32()
+    max_chunk = r.u32()
+    avg_bits = r.u8()
+    chunk_count = r.u32()
+    if max_chunk == 0 or min_chunk > max_chunk:
+        raise FormatError(f"implausible chunk bounds min={min_chunk} max={max_chunk}")
+    if chunk_count > r.remaining():
+        raise FormatError(f"chunk_count {chunk_count} exceeds remaining payload {r.remaining()}")
+    chunks: list[ChunkRef] = []
+    for _ in range(chunk_count):
+        digest = r.take(32)
+        length, r.i = _read_varint(data, r.i)
+        chunks.append(ChunkRef(digest, length))
+    root = r.take(32)
+    if r.remaining() != 0:
+        raise FormatError(f"DCHK has {r.remaining()} trailing byte(s)")
+    return Manifest(1 << avg_bits if avg_bits < 63 else 0, chunks, root, min_chunk, max_chunk, avg_bits, "impl")
+
+
+def _encode_varint(value: int) -> bytes:
+    out = bytearray()
+    while True:
+        byte = value & 0x7F
+        value >>= 7
+        if value:
+            out.append(byte | 0x80)
+        else:
+            out.append(byte)
+            return bytes(out)
 
 
 def manifest_root(chunks: list[ChunkRef]) -> bytes:

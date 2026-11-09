@@ -36,7 +36,10 @@ test "signature json carries the documented fields" {
   assert_eq(line.contains("\"strong_len\":8"), true)
   assert_eq(line.contains("\"block_count\":1"), true)
   assert_eq(line.contains("\"signature_bytes\":34"), true)
-  assert_eq(line.contains("\"sha256_hex\":\"" + sha256_hex(data[:]) + "\""), true)
+  assert_eq(
+    line.contains("\"sha256_hex\":\"" + sha256_hex(data[:]) + "\""),
+    true,
+  )
   assert_eq(line.contains("\"xxh64_hex\":\"" + xxh64_hex(data[:]) + "\""), true)
 }
 
