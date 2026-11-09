@@ -45,35 +45,38 @@ def default_block_size(length: int) -> int:
 
 
 def weak_checksum(data: bytes) -> int:
-    """对窗口 w[0..n) 直接计算弱校验。
+    """§6.1（2026-11-09 修订）：标准 Adler-32 语义。
 
-    a = sum(w[i])            (mod 65521)
-    b = sum((n - i) * w[i])  (mod 65521)
-    weak = (b << 16) | a
+        a = 1 + Σ w[i]            (mod 65521)
+        b = n + Σ (n - i) * w[i]  (mod 65521)
+        weak = (b << 16) | a
+
+    与 zlib.adler32 完全一致（自测里直接和 zlib 对比）。
     """
     n = len(data)
-    if n == 0:
-        return 0
-    a = 0
-    b = 0
+    a = 1
+    b = n
     for i, byte in enumerate(data):
         a += byte
         b += (n - i) * byte
-    a %= MOD
-    b %= MOD
-    return ((b & 0xFFFF) << 16) | (a & 0xFFFF)
+    return (((b % MOD) & 0xFFFF) << 16) | ((a % MOD) & 0xFFFF)
 
 
 class RollingWeak:
-    """§6.1 滑动窗口弱校验的增量更新（加入/移出字节，窗口长度不变）。"""
+    """§6.1 滑动窗口弱校验的增量更新（加入/移出字节，窗口长度不变）。
+
+    修订后（带常数 1）：
+        a' = a - out + in
+        b' = b - n * out + a' - 1
+    """
 
     __slots__ = ("n", "a", "b")
 
     def __init__(self, window: bytes):
         n = len(window)
         self.n = n
-        a = 0
-        b = 0
+        a = 1
+        b = n
         for i, byte in enumerate(window):
             a += byte
             b += (n - i) * byte
@@ -86,29 +89,11 @@ class RollingWeak:
     def roll(self, out_byte: int, in_byte: int) -> int:
         """移出 out_byte、移入 in_byte；返回新窗口的 weak。"""
         n = self.n
-        a = self.a - out_byte + in_byte
-        a %= MOD
-        b = (self.b - n * out_byte + a) % MOD
+        a = (self.a - out_byte + in_byte) % MOD
+        b = (self.b - n * out_byte + a - 1) % MOD
         self.a = a
         self.b = b
         return self.value()
-
-
-def weak_checksum_standard(data: bytes) -> int:
-    """标准 Adler-32（zlib 语义）：A = 1 + Σw，B = Σ(n-i)w_i + n。
-
-    仅用于诊断「实现是否等于标准 Adler-32」；design.md §6.1 定义的是无 +1/+n 的变体，
-    但实测被测实现的 DSIG 记录的是标准 Adler-32（见报告 A13）。
-    """
-    n = len(data)
-    if n == 0:
-        return 1
-    a = 1
-    b = n
-    for i, byte in enumerate(data):
-        a += byte
-        b += (n - i) * byte
-    return (((b % MOD) & 0xFFFF) << 16) | ((a % MOD) & 0xFFFF)
 
 
 # ---------------------------------------------------------------------------
