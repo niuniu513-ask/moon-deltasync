@@ -74,10 +74,19 @@ pub fn sign_source(
   source : &ByteSource,
   block_size? : Int32,
   strong_len? : Int32,
+  total_length? : Int32,
 ) -> FileSignature raise FormatError {
+  // A stream cannot measure itself before it is read, so the adaptive default of
+  // `sign_bytes` is only available when the caller states the total length. With
+  // neither a block size nor a hint the block size is 8192, which is what
+  // `sign_bytes` uses for inputs of 4096 bytes or more.
   let size = match block_size {
     Some(value) => value
-    None => 8192
+    None =>
+      match total_length {
+        Some(length) => default_block_size(length)
+        None => 8192
+      }
   }
   if size < min_block_size || size > max_block_size {
     raise TooLarge(
@@ -186,7 +195,12 @@ pub fn sign_memory(
   block_size? : Int32,
   strong_len? : Int32,
 ) -> FileSignature raise FormatError {
-  sign_source(MemorySource::new(data) as &ByteSource, block_size?, strong_len?)
+  sign_source(
+    MemorySource::new(data) as &ByteSource,
+    block_size?,
+    strong_len?,
+    total_length=data.length(),
+  )
 }
 
 ///|

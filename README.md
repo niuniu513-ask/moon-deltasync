@@ -1,4 +1,4 @@
-# moon-deltasync
+﻿# moon-deltasync
 
 MoonBit 增量传输内核。在两个版本的数据之间只传差异，并在接收端**可验证地**重建出与源逐字节相同的结果。
 
@@ -25,6 +25,17 @@ MoonBit 增量传输内核。在两个版本的数据之间只传差异，并在
 | 备份 / 构建缓存：两个版本重复了多少？ | 两个版本的对象 → 内容定义分块、指纹索引、引用计数 → `DCHK` manifest + 去重率 + 可重建校验 | `ChunkStore::ingest` / `assemble`；`examples/chunk_dedup` |
 
 第一条是唯一会**拒绝**数据的路径，也是一层的叠加：delta 里每个 `COPY`/`COPY_RUN` 自带所复制内容的强校验（接收端**不需要签名文件**就能逐 op 验证），最后一层是 `DDLT` 头部携带的目标数据 SHA-256。
+
+## 能力概览
+
+- **块签名 `DSIG`**：Adler-32 变体弱校验（模 65521，O(1) 滑动更新）+ SHA-256 前缀强校验，22 字节定长头，解析时校验字段自洽并拒绝尾部多余字节。
+- **delta `DDLT` 与逐层校验**：弱校验分桶 + 等块长滑窗，`COPY`/`COPY_RUN` 自带强校验，`LITERAL` 携带新数据；应用时逐 op 校验 + 整体 `content_digest` 校验 + 结构校验，任一层失败即报错。
+- **内容定义分块 `DCHK`**：gear hash 单遍切分（默认 2048 / 8192 / 32768），manifest 记录分块参数与块指纹，`root` 由指纹确定性导出。
+- **去重块存储**：`ChunkStore` 按指纹存块、按引用计数管理生命周期，`ingest` 报告新增/复用/字节节省。
+- **流式签名与分块**：`ByteSource` 拉取式字节源 + `sign_source` / `chunk_source`，一次只持有一个块或一个 chunk，**不需要整份数据在内存里**。这是为数十 GiB 级磁盘镜像、超大备份对象准备的：`sign_bytes` 要求 `BytesView`，那类对象根本装不进内存。
+- **delta 链**：`apply_chain(old, deltas)` 跨多个版本逐步应用、逐步校验，某一环的基准版本不对就停在那里，不会把错误数据喂给下一环。
+- **块回收**：`ChunkStore::retain` / `release` / `collect` 用引用计数回收，只删计数归零的块，仍被 manifest 引用的块不会被误删。
+- **报告与 CLI**：文本 / JSON / Markdown 三态报告；`sign` / `delta` / `apply` / `chunk` / `verify` 五个子命令，四个支持 `--out` 导出原始字节。
 
 ## 环境与快速开始
 
@@ -55,11 +66,13 @@ moon run   examples/corruption_check --target js
 
 JS 后端需要 Node.js；`wasm`、`wasm-gc` 由 `moonrun` 直接执行；native 后端需要 MSVC（`cl.exe`/`clang-cl`），本机未安装，见下文「验证状态」。四个后端必须产生**逐字节相同**的签名、delta 与 manifest（不变量 7）；本机已在 js / wasm / wasm-gc 上跑通，native 由 CI 覆盖。
 
-已发布到 Mooncakes：`niuniu513-ask/moon-deltasync@0.1.1`（MIT）。在另一个包里引用：
+已发布到 Mooncakes：`niuniu513-ask/moon-deltasync@0.1.2`（MIT；Mooncakes 文档页实测列出 0.1.0 / 0.1.1 / 0.1.2）。在另一个包里引用：
 
 ```sh
-moon add niuniu513-ask/moon-deltasync@0.1.1
+moon add niuniu513-ask/moon-deltasync@0.1.2
 ```
+
+本文描述的流式入口、delta 链与块回收属于 **0.2.0** 的内容；`moon.mod` 当前版本号仍是 0.1.2，等维护者发布 0.2.0 后把上面的版本号换成 0.2.0 即可使用这些新接口。
 
 ```moonbit
 import {
@@ -143,14 +156,17 @@ root:u8[32]    // = SHA-256(concat(每个块的 32 字节 sha256))
 | 层 | 入口 |
 | --- | --- |
 | 签名 | `sign_bytes(input, block_size?, strong_len?) -> FileSignature`、`decode_signature`、`FileSignature::{encode, block_count, block_length, digest_hex}`、`signature_matches` |
+| 流式 | `pub(open) trait ByteSource { fn next(Self) -> Bytes? }`、`MemorySource::new(data, window?)`、`sign_source(source, block_size?, strong_len?)`、`chunk_source(source, params?)`、便捷包装 `sign_memory` / `chunk_memory` |
 | delta | `compute_delta(new, signature) -> Delta`、`Delta::encode`、`decode_delta`、`apply_delta(old, delta) -> ApplyResult`、`Delta::{digest_hex, op_count, copy_ops, copied_blocks, copied_bytes, literal_bytes}` |
-| 工作流 | `plan_transfer(old, new, block_size?, strong_len?)`、`plan_from_signature(sig, new)`、`verified_update(old, delta_bytes)`、`TransferPlan::{delta, signature, delta_bytes, new_length, copy_ops, copied_bytes, literal_bytes, savings_ppm}` |
+| 工作流 | `plan_transfer(old, new, block_size?, strong_len?)`、`plan_from_signature(sig, new)`、`verified_update(old, delta_bytes)`、`apply_chain(old, deltas) -> ChainResult`、`TransferPlan::{delta, signature, delta_bytes, new_length, copy_ops, copied_bytes, literal_bytes, savings_ppm}` |
 | 分块 | `chunk_boundaries(input, params?)`、`chunk_manifest(input, params?)`、`ChunkManifest::{encode, verify, chunk_count, total_length, unique_chunks, root_hex}`、`decode_manifest` |
-| 块存储 | `ChunkStore::{new, ingest, assemble, unique_chunks, stored_bytes, saved_bytes}`、`ingest_snapshot(store, input, params?)` |
+| 块存储 | `ChunkStore::{new, ingest, assemble, unique_chunks, stored_bytes, saved_bytes, total_bytes_ingested, references, retain, release, collect}`、`ingest_snapshot(store, input, params?)` |
 | 报告 | `render_signature_json(signature, path, content_sha256_hex, content_xxh64_hex)`、`render_delta_json`、`render_apply_json`、`render_chunk_json`、`render_error_json`、`render_plan_text`、`render_plan_markdown`、`ppm_text` |
 | 基础 | `sha256`、`sha256_hex`、`sha256_prefix`、`weak_checksum`、`WeakRoll`、`xxh64`、`hex_encode`、`hex_decode`、`constant_time_equal`、`ByteSink` |
 
-两个值得注意的类型细节：`BlockSignature.index` / `weak` 是 `Int32` / `UInt32`；`Delta` 含 `content_digest : Bytes`，`DeltaOp::Copy` 是 `Copy(Int32, Bytes)`（块号 + 该块强校验），`CopyRun(Int32, Int32, Bytes)`，`Literal(Bytes)`。
+`pkg.generated.mbti` 当前暴露 **98 个函数、16 个结构体、1 个 `pub(open)` trait、1 个枚举**。
+
+三个值得注意的类型细节：`BlockSignature.index` / `weak` 是 `Int32` / `UInt32`；`Delta` 含 `content_digest : Bytes`，`DeltaOp::Copy` 是 `Copy(Int32, Bytes)`（块号 + 该块强校验），`CopyRun(Int32, Int32, Bytes)`，`Literal(Bytes)`；`ChainResult` / `GcReport` 都是只读结果结构（字段见 [docs/usage.md](docs/usage.md) §3）。
 
 ## 命令行
 
@@ -200,7 +216,7 @@ moon run cmd/main --target js -- chunk new.txt --out new.dchk
 
 ## 不变量
 
-以下 8 条是工程契约，每条都有对应测试（`moon test` 38 项，见「验证状态」）：
+以下 11 条是工程契约，每条都有对应测试（`moon test` 48 项，见「验证状态」）：
 
 1. **重建一致**：任意 `old`、`new`，`apply_delta(old, compute_delta(new, sign_bytes(old)))` 的输出等于 `new`。
 2. **规范化**：`compute_delta` 的输出满足「相邻同类 op 已合并」，重新序列化后逐字节相同。
@@ -210,6 +226,11 @@ moon run cmd/main --target js -- chunk new.txt --out new.dchk
 6. **去重正确**：manifest 重建出的字节与输入相同，`root` 由块指纹确定性导出。
 7. **跨后端一致**：相同输入在 `wasm` / `wasm-gc` / `js` / `native` 上的签名、delta、manifest 逐字节相同。
 8. **无 panic**：截断、错 magic、错长度、超大 count、错块号等畸形输入全部返回 `FormatError` 诊断。
+9. **流式等价**：同一份数据，无论 `ByteSource` 每次交付多少字节（1 / 7 / 1024 / 64 KiB 都一样），`sign_source` / `chunk_source` 的产物与 `sign_bytes` / `chunk_manifest` **逐字节相同**。
+10. **链式校验**：`apply_chain` 逐步应用、逐步验证；任何一环用错基准版本都会在该环停下（`BlockMismatch` / `DigestMismatch`），不会把错误数据交给下一环。
+11. **回收安全**：`release` 之后只有引用计数为 0 的块会被 `collect` 删除；仍被某个 manifest 引用的块，`assemble` 之后仍能重建出原字节。
+
+> 不变量 9 有一个前提值得记住：`sign_source` 的默认块大小是 **8192**（流式无法预知总长度，所以不做长度自适应），而 `sign_bytes` 在 `length < 4096` 时默认 **512**。因此要让两者逐字节相等，请**显式传同一个 `block_size`**；数据长度 ≥ 4096 时两者默认值一致，无需额外处理。`chunk_source` 与 `chunk_manifest` 的默认参数相同，无条件等价。
 
 `FormatError` 有 8 个构造子：`BadMagic` / `UnsupportedVersion` / `Truncated` / `BadField` / `TooLarge` / `BlockMismatch` / `UnsupportedOp` / `DigestMismatch`，并提供 `message()` 取人读文本。
 
@@ -218,9 +239,12 @@ moon run cmd/main --target js -- chunk new.txt --out new.dchk
 | 操作 | 时间 | 额外空间 |
 | --- | --- | --- |
 | `sign_bytes` | O(n) 单遍 | 签名 = `22 + block_count * (4 + strong_len)` 字节 |
+| `sign_source` / `sign_memory` | O(n) 单遍 | **常数**：一次只缓冲一个块（外加签名本身） |
 | `compute_delta` | O(新数据长度)，未命中时最多额外 `block_size` 次字节比较 | 弱校验分桶索引 + 输出 delta |
 | `apply_delta` | O(新数据长度) | 输出缓冲 |
+| `apply_chain` | 各环相加 | 逐环输出缓冲 |
 | `chunk_boundaries` / `chunk_manifest` | O(n) 单遍，窗口恒定 | 每块 32 字节指纹 + varint 长度 |
+| `chunk_source` / `chunk_memory` | O(n) 单遍 | **常数**：一次只缓冲一个 chunk |
 
 规模上界（越界即 `TooLarge`/`BadField`，不做静默降级）：`block_size ∈ [256, 1 MiB]`，`strong_len ∈ {8, 16}`，`block_count ≤ 1_000_000`，`total_length ≤ 2^40`。未指定 `block_size` 时按长度自适应：`length < 4096` 用 512，否则 8192。
 
@@ -238,18 +262,19 @@ moon run cmd/main --target js -- chunk new.txt --out new.dchk
 
 ## 验证状态
 
-**本机实测**（2026-11-09，`moonc v0.10.17+d971670cd`）：
+**本机实测**（2026-11-10，`moonc v0.10.17+d971670cd`）：
 
 | 项目 | 结果 |
 | --- | --- |
 | `moon check --deny-warn --target all` | 通过，0 warning |
 | `moon build --target js` / `--target wasm-gc` | 通过 |
-| `moon test --deny-warn --target js` | 38 tests, 38 passed, 0 failed |
-| `moon test --deny-warn --target wasm` / `wasm-gc` | 各 38/38 通过 |
+| `moon test --deny-warn --target js` | 48 tests, 48 passed, 0 failed |
+| `moon test --deny-warn --target wasm` / `wasm-gc` | 各 48/48 通过 |
 | `moon test --target native` | **未在本机运行**：`moon build --target native` 报缺少 MSVC（`cl.exe`/`clang-cl`），由 CI 覆盖 |
 | 三个示例 | 全部实跑，输出见上文 |
 | CLI 端到端 | `sign`→`delta`→`apply` 重建结果与新文件 SHA-256 一致；`verify` 与 PowerShell `Get-FileHash` 一致 |
 | CLI `--out` 四个子命令 | 全部写出原始字节：`sign` 322 B（= `signature_bytes`）、`chunk` 190 B（= `manifest_bytes`）、`delta` 与 `apply` 同样落地，均与 JSON 内的字节数一致 |
+| 代码规模 | 实现 2,524 行 + CLI 231 行 + 测试 672 行 + 示例 157 行 = **3,584 行** `.mbt` |
 
 CI（`.github/workflows/ci.yml`）在 ubuntu-latest 上跑 `check`/`build`/`test --target all`，并用 `moon fmt` + `git diff --exit-code` 与 `moon info` + `git diff --exit-code` 检查格式化与接口文件是否稳定。`main` 上最近若干次运行均为 `success`（`gh run list` 复核，最近一次耗时 36s）。
 
@@ -277,7 +302,7 @@ CI（`.github/workflows/ci.yml`）在 ubuntu-latest 上跑 `check`/`build`/`test
 
 - **GitHub**：`niuniu513-ask/moon-deltasync` 是 **PUBLIC** 仓库，默认分支 `main`，本机 `main` 与 `origin/main` 指向同一提交（仓库仍在活跃提交，SHA 会变）。
 - **CI**：`gh run list` 显示 `main` 上最近若干次运行均为 `success`，最近一次是「docs: make the type declarations and the --out note match the code」，耗时 36s。
-- **Mooncakes**：`niuniu513-ask/moon-deltasync@0.1.1` 已发布（MIT，`is_new: true`，创建于 2026-11-09），因此上面的 `moon add` 可用。
+- **Mooncakes**：`niuniu513-ask/moon-deltasync@0.1.2` 已发布（MIT；`moon.mod` 同为 0.1.2，因此上面的 `moon add` 可用）。0.2.0 由维护者发布，本文件复核时注册表最新仍是 0.1.2。
 
 仍然只是「未被本文核实」、而不是「已知有问题」的部分：
 

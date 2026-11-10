@@ -9,9 +9,9 @@
 /// read a file or a socket here; the point is that the library only asks for the
 /// next slice.
 struct DocumentSource {
-  mut sent : Int
-  total : Int
-  width : Int
+  mut sent : Int32
+  total : Int32
+  width : Int32
 }
 
 ///|
@@ -37,9 +37,11 @@ impl @ds.ByteSource for DocumentSource with fn next(self : DocumentSource) -> By
 fn main raise {
   let total = 300_000
   // 1. Sign the stream in 1000 byte pieces.
-  let source : DocumentSource = { sent: 0, total, width: 1000 }
+  let source : DocumentSource = { sent: 0, total, width: 1000, }
   let streamed = @ds.sign_source(source as &@ds.ByteSource, block_size=8192)
-  println("streamed signature: \{streamed.total_length} bytes, \{streamed.blocks.length()} blocks")
+  println(
+    "streamed signature: \{streamed.total_length} bytes, \{streamed.blocks.length()} blocks",
+  )
   // 2. The same data through the in-memory path must produce the same bytes.
   let whole = {
     let builder = @ds.ByteSink::new()
@@ -49,11 +51,17 @@ fn main raise {
     builder.to_bytes()
   }
   let buffered = @ds.sign_bytes(whole[:], block_size=8192)
-  println("identical to the buffered signature: \{@ds.hex_encode(streamed.encode()[:]) == @ds.hex_encode(buffered.encode()[:])}")
+  println(
+    "identical to the buffered signature: \{@ds.hex_encode(streamed.encode()[:]) == @ds.hex_encode(buffered.encode()[:])}",
+  )
   // 3. Chunking can stream too, which is what a backup tool needs for a disk image.
-  let chunk_source : DocumentSource = { sent: 0, total, width: 4096 }
+  let chunk_source : DocumentSource = { sent: 0, total, width: 4096, }
   let manifest = @ds.chunk_source(chunk_source as &@ds.ByteSource)
-  println("streamed manifest: \{manifest.chunk_count()} chunks, root \{manifest.root_hex()}")
+  println(
+    "streamed manifest: \{manifest.chunk_count()} chunks, root \{manifest.root_hex()}",
+  )
   let memory_manifest = @ds.chunk_manifest(whole[:])
-  println("same root as the buffered manifest: \{manifest.root_hex() == memory_manifest.root_hex()}")
+  println(
+    "same root as the buffered manifest: \{manifest.root_hex() == memory_manifest.root_hex()}",
+  )
 }

@@ -108,3 +108,47 @@ test "an empty stream chunks to an empty manifest" {
   assert_eq(manifest.chunk_count(), 0)
   assert_eq(manifest.total_length(), 0)
 }
+
+///|
+test "the length hint restores the adaptive default" {
+  // `sign_bytes` picks a 512 byte block size for inputs under 4096 bytes. A
+  // stream cannot know that in advance, so `sign_source` needs the hint to agree.
+  let data = pattern(1000, 91)
+  let buffered = sign_bytes(data[:])
+  let hinted = sign_source(
+    MemorySource::new(data[:], window=37) as &ByteSource,
+    total_length=data.length(),
+  )
+  assert_eq(hinted.block_size, buffered.block_size)
+  assert_eq(hex_encode(hinted.encode()[:]), hex_encode(buffered.encode()[:]))
+}
+
+///|
+test "without a hint the streaming default is 8192" {
+  let data = pattern(1000, 92)
+  let unhinted = sign_source(MemorySource::new(data[:]) as &ByteSource)
+  assert_eq(unhinted.block_size, 8192)
+  let buffered = sign_bytes(data[:])
+  assert_eq(buffered.block_size, 512)
+  // The two differ only in the block size they chose, which the format records.
+  assert_eq(unhinted.total_length, buffered.total_length)
+}
+
+///|
+test "sign_memory agrees with sign_bytes on small inputs" {
+  let data = pattern(700, 93)
+  let via_memory = sign_memory(data[:])
+  let buffered = sign_bytes(data[:])
+  assert_eq(
+    hex_encode(via_memory.encode()[:]),
+    hex_encode(buffered.encode()[:]),
+  )
+}
+
+///|
+test "chunk_memory agrees with chunk_manifest" {
+  let data = pattern(50000, 94)
+  let via_memory = chunk_memory(data[:])
+  let buffered = chunk_manifest(data[:])
+  assert_eq(via_memory.root_hex(), buffered.root_hex())
+}

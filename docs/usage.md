@@ -1,4 +1,4 @@
-# 使用指南
+﻿# 使用指南
 
 本文说明 `moon-deltasync` 的公开用法。语义契约见 [design.md](design.md)，接口清单以 [pkg.generated.mbti](../pkg.generated.mbti) 为准。本文的 API 调用形式取自仓库中可编译的 `examples/` 与 `public_test.mbt`，数字是 `--target js` 的实跑输出。
 
@@ -53,6 +53,14 @@ pub struct SnapshotReport {
 }
 
 pub struct TransferPlan { signature : FileSignature, delta : Delta, new_length : Int32, delta_bytes : Int32 }
+
+// 流式（stream.mbt）
+pub(open) trait ByteSource { fn next(Self) -> Bytes? }
+pub struct MemorySource { data : Bytes, mut offset : Int32, window : Int32 }
+
+// 跨版本更新与回收
+pub struct ChainResult { steps : Int32, bytes_written : Int32, blocks_verified : Int32, digest_hex : String, output : Bytes }
+pub struct GcReport { removed_chunks : Int32, reclaimed_bytes : Int32, remaining_chunks : Int32, remaining_bytes : Int32 }
 ```
 
 三个容易踩的类型细节：
@@ -147,7 +155,86 @@ let rebuilt  = store.assemble(manifest)                // 缺块会抛 FormatErr
 
 实测（`examples/chunk_dedup`，两个约 139 KiB 版本，只有一处 generation 标记不同）：第一个版本 13 块全部新增，第二个版本 13 块中复用 12、新增 1，`saved_bytes 136156`，重建哈希与源一致。
 
-## 7. 错误处理
+## 7. 流式签名与分块
+
+`sign_bytes` / `chunk_manifest` 要 `BytesView`，对测试和小文件没问题，对数十 GiB 的磁盘镜像不可能。流式入口换成拉取式字节源：**库只持有一个块或一个 chunk**，数据怎么来由调用方决定。
+
+```moonbit
+// 1) 内存数据，按 777 字节一批交付
+let sig_source = @ds.MemorySource::new(data[:], window=777)
+let signature = @ds.sign_source(sig_source as &ByteSource, block_size=1024)
+
+// 2) 同一份数据做分块：ByteSource 是消耗品，读完就到底，所以另开一个
+let chunk_src = @ds.MemorySource::new(data[:], window=777)
+let manifest = @ds.chunk_source(chunk_src as &ByteSource)
+
+// 3) 自己实现 ByteSource，接文件 / socket / 解压流（示意，读盘细节略）
+struct FileSource { mut pending : Bytes? }
+impl ByteSource for FileSource with fn next(self : FileSource) -> Bytes? {
+  // 读到一块返回 Some(block)，读完返回 None
+}
+let signature = @ds.sign_source(file_source as &ByteSource, block_size=8192)
+```
+
+要点：
+
+- **必须显式转 trait 对象**：MoonBit 不会自动把 `MemorySource` 隐式当成 `&ByteSource`，写法是 `source as &ByteSource`。这一步漏了会直接编译失败，不会静默。
+- **`window` 是每次 `next` 最多交付多少字节**，默认 64 KiB；`window ≤ 0` 会被当作 64 KiB。窗口大小**不影响产物**——这是不变量 9：1 / 7 / 1024 / 64 KiB 得到同一份 `DSIG` / `DCHK`。
+- **`sign_memory` / `chunk_memory`** 是给「数据已在内存、但想走同一条流式代码路径」的便捷包装，省掉建 trait 对象。
+
+> **等价性有一个前提，必须记住。** `sign_source` / `sign_memory` 的默认 `block_size` 是 **8192**——流式读到最后才知道总长，做不了长度自适应。而 `sign_bytes` 在 `length < 4096` 时默认 **512**。所以：
+> - 数据 ≥ 4096 字节且都不传 `block_size`：两者默认值都是 8192，逐字节相同。
+> - 数据 < 4096 字节（含空输入）且都不传 `block_size`：`sign_bytes` 用 512、`sign_source` 用 8192，**产物不同**（`DSIG` 头部就写着 `block_size`）。
+> - 要无条件等价，就显式传同一个 `block_size`——仓库里的流式等价测试都是这么写的。
+>
+> `chunk_source` 与 `chunk_manifest` 没有这个问题：两者的默认 `ChunkParams` 一致。
+
+## 8. delta 链：跨版本更新
+
+客户端从 v1 升到 v4，而服务端只有 v1→v2、v2→v3、v3→v4 三段 delta 时，用 `apply_chain` 一次走完，不用自己管中间缓冲：
+
+```moonbit
+let result = @ds.apply_chain(v1[:], [d12[:], d23[:], d34[:]])
+result.steps            // 应用成功的段数
+result.bytes_written    // 最终字节数
+result.blocks_verified  // 累计校验通过的块数
+result.digest_hex       // 最终结果的 SHA-256
+result.output           // 最终字节
+```
+
+语义是**逐步应用、逐步验证**（不变量 10）：每一环都调用一次 `verified_update`（解码 + 逐 op 强校验 + 整体摘要校验），通过之后才作为下一环的 `old`。任何一环的基准版本对不上，就在那一环抛 `BlockMismatch` / `DigestMismatch` 停下，**不会**把错误的中间结果喂给下一环，也不会返回部分成功——所以只要拿到 `ChainResult`，就意味着**全部** `steps` 段都成功了（`steps == deltas.length()`）。
+
+两个使用上的注意点：
+
+- **错误里带的是块号，不是段号**：`BlockMismatch(index)` 的 `index` 是**块序号**，错误对象里没有「第几段 delta 失败」这个信息。要定位断在哪一段，自己在外层循环里逐段调用 `verified_update` 并记录段号。
+- **中间结果全在内存**：`apply_chain` 每段都产生完整的新字节，一次调用的峰值是「当前版本 + 下一版本」。跨很多大版本时，宁可逐段调用并自己落盘。
+
+## 9. 块回收
+
+`ChunkStore` 一直存块会越用越大。显式引用计数让生命周期可控：
+
+```moonbit
+let store = @ds.ChunkStore::new()
+let m1 = @ds.chunk_manifest(v1[:])
+let m2 = @ds.chunk_manifest(v2[:])
+
+let report = store.ingest(v1[:])   // 存入 v1 的块；每块出现一次 → 引用 +1
+let key = @ds.hex_encode(m1.chunks[0].digest[:])
+store.references(key)              // 这个块现在被引用几次（未知块返回 0）
+
+store.retain(m2)                   // 为 m2 用到的块各 +1
+let freed = store.release(m1)      // 为 m1 用到的块各 -1；返回「计数归零的块数」
+let gc : @ds.GcReport = store.collect()
+gc.removed_chunks; gc.reclaimed_bytes; gc.remaining_chunks; gc.remaining_bytes
+```
+
+- **只有引用计数为 0 的块会被 `collect` 删除**（不变量 11）。仍被某个 manifest 引用的块不会被误删，`assemble` 之后仍能重建出原字节。
+- **计数是按「块出现次数」算的**，不是按「有几个 manifest 用到它」：同一份数据里同一个块出现两次，`ingest` 之后计数就是 2；因此 `release` 一次只减掉该 manifest 里的出现次数。
+- `ingest` 本身就会 retain（新块置 1、已存在则 +1），所以「先 ingest 再 release」是配对的；只想为一份没 ingest 过的 manifest 加引用时才需要显式 `retain`。
+- `release` 返回的是**归零块数**，不是立即删除的字节数——真正回收发生在 `collect()`，可以把多次 release 合成一次回收。
+- `references` 的参数是**块的 SHA-256 十六进制串**（用 `hex_encode` 从 `ChunkRef.digest` 得到），不是 `Bytes`。
+
+## 10. 错误处理
 
 所有可出错的地方收敛到一个 `suberror FormatError`，8 个构造子：
 
@@ -183,7 +270,7 @@ let outcome = try {
 | 输入文件读不到、输出文件写不了 | `read_failed` / `write_failed` | 1 |
 | 库抛出的任何 `FormatError` | `format_error` | 1 |
 
-## 8. 命令行
+## 11. 命令行
 
 ```sh
 moon-deltasync sign    <path>                 [--out dsig]   # 摘要，可导出 DSIG
@@ -205,7 +292,7 @@ moon run cmd/main --target js -- verify new.txt <64-hex>
 
 `--target` 可取 `wasm`、`wasm-gc`、`js`、`native`（native 需 MSVC）。
 
-### 8.1 六种 JSON 行的实际字段
+### 11.1 六种 JSON 行的实际字段
 
 以下是同一对文件（120890 → 120935 字节文本）的实跑输出，省略长哈希：
 
@@ -223,14 +310,14 @@ moon run cmd/main --target js -- verify new.txt <64-hex>
 - `savings_ratio` = `1 - delta_bytes/new_length`，由整数 ppm 渲染成 4 位小数；`dedup_ratio` 同理，来自 `saved_bytes / 累计已摄入字节`。
 - `manifest_bytes` = `DCHK` 序列化长度，`chunk --out` 写出的文件实测与它等长（190 字节）。
 
-### 8.2 四条容易踩的 CLI 行为
+### 11.2 四条容易踩的 CLI 行为
 
 1. **四个子命令的 `--out` 都生效**：`sign` 写 `DSIG`、`chunk` 写 `DCHK`、`delta` 写 `DDLT`、`apply` 写重建结果，写的都是**原始字节**而非 JSON。省略 `--out` 时只打印 JSON。
 2. **`verify` 有两档失败**：① 参数个数不是 2、摘要不是合法十六进制或不是 32 字节 → `{"kind":"error","code":"usage",…}` + **退出码 1**（实测 `verify f zzzz` → `the expected digest is not hexadecimal`）；② 摘要合法但与文件不符 → `{"kind":"verify","ok":false,…}` + **退出码 0**，这是正常结论（「这份文件不是这个摘要」），脚本里请解析 `ok`。
 3. **未知命令与未知参数都是 `usage` 错误 + 退出码 1**（实测 `sign f --bogus` → `unexpected argument: --bogus`），不会静默丢弃参数。
 4. **坏输入不 panic**：格式损坏的 delta 返回 `{"kind":"error","code":"format_error","message":"bad magic: expected DSIG, found 0x01020304"}` + 退出码 1，而不是崩溃或部分重建。
 
-## 9. 实测样例
+## 12. 实测样例
 
 同一份库在不同数据上的表现差别很大，这三行都值得看：
 
@@ -242,7 +329,7 @@ moon run cmd/main --target js -- verify new.txt <64-hex>
 
 第一、三行的差别不是缺陷：rsync 类方法节省的是**对齐的重复内容**。随机数据本身没有重复可省，而插入会破坏对齐；`savings_ratio` 接近 0 时应该考虑换块大小，或者干脆直接传整份文件。
 
-## 10. 边界与常见误用
+## 13. 边界与常见误用
 
 - **`weak` 不是校验**：它只用于把候选块缩小到常数个，真正的判断在 `strong`。不要只比 `weak` 就接受数据。
 - **强校验不是签名**：SHA-256 前缀和整体摘要能发现损坏，不能证明来源。需要身份认证就外加固签名，本库不提供。
@@ -251,9 +338,9 @@ moon run cmd/main --target js -- verify new.txt <64-hex>
 - **输入全是内存字节**：不做文件系统、不做内存映射、不做流式增量解析；超大对象要调用方自己切分，切分方式会影响去重率。
 - **畸形输入必须报错而不是崩溃**（不变量 8）：如果你在封装里遇到某个输入导致 panic，那是实现的 bug，不是用法问题。
 - **四个后端结果必须逐字节相同**（不变量 7）：`js` 与 `native` 的 delta 字节不同就是缺陷，不能当成「实现差异」放过。
-- **`verify` 的退出码不等于「文件正确」**：`ok:false` 时退出码是 0（见 8.2 第 2 条）；只有 `code:"usage"` 之类才是非零。
+- **`verify` 的退出码不等于「文件正确」**：`ok:false` 时退出码是 0（见 11.2 第 2 条）；只有 `code:"usage"` 之类才是非零。
 
-## 11. 契约对齐状态（逐条复核于 2026-11-09，对应 commit `4b0f12d`）
+## 14. 契约对齐状态（逐条复核于 2026-11-10，对应 commit `4b0f12d` + 本轮 stream/chain/gc）
 
 | design.md 位置 | 检查项 | 状态 |
 | --- | --- | --- |
@@ -270,5 +357,15 @@ moon run cmd/main --target js -- verify new.txt <64-hex>
 | §8.1 delta 示例 | `op_count`、`copy_ops`、`copy_blocks`、`copied_bytes` | **已对齐**（实测 `3 / 2 / 14 / 114688`） |
 | §8.1 chunk 示例 | `unique_chunks`、`dedup_ratio`、`manifest_bytes` | **已对齐**，且 `manifest_bytes` 的算法（`18 + Σ(32 + varint)` + 32）与实测一致 |
 | §8.1 apply 示例 | `ops_applied` | **已对齐** |
+| §3 模块表（本轮） | 新增 `stream.mbt` 一行，职责写「流式入口 `ByteSource`」 | **已对齐**，文件与 trait 都存在 |
+| §4 类型（本轮） | 新类型是否有对应实现 | `ByteSource` / `MemorySource` / `ChainResult` / `GcReport` 均在 `pkg.generated.mbti` 中 |
+| §7 不变量 9（流式等价） | 窗口 1 / 7 / 1024 / 64 KiB 产物一致 | **已对齐**（`stream_wbtest.mbt` 6 项测试，全部对比整缓冲结果） |
+| §7 不变量 10（链式校验） | 错基准在中间停下 | **已对齐**（`sync_wbtest.mbt`「a chain of deltas applies step by step」「a broken link in the chain is reported」） |
+| §7 不变量 11（回收安全） | 只删零引用块、保留块仍可重建 | **已对齐**（`chunk_wbtest.mbt`「reference counting keeps shared chunks and drops the rest」「a retained snapshot survives a collect」） |
+| §7.9 等价性的前提 | 原文说「无论窗口多大都与 `sign_bytes` 完全相同」，未提前提 | **需补一句**：`sign_source` 默认 `block_size` 固定 8192（流式无法预知总长），`sign_bytes` 在 `length < 4096` 时默认 512；两者默认值不同，< 4096 字节的输入（含空输入）不显式传 `block_size` 时产物不同。测试与本文都按「显式传 `block_size`」处理 |
 
-**未对齐：0 条。** 上一轮遗留的两处（§4 的类型声明代码块、§8.1 末尾的 `--out` 注）已在 `4b0f12d` 修掉并复核。外部校验器的最新一轮（硬断言 775/775、阻塞 0）是这份对齐状态的独立佐证。
+**结构性不一致：0 条。** 上一轮遗留的两处（§4 类型声明块、§8.1 末尾 `--out` 注）已在 `4b0f12d` 修掉并复核；本轮新增的流式、delta 链、块回收三类接口在 §3 / §4 / §7 都有对应描述与测试。
+
+**唯一待补的是 §7.9 的一句措辞前提**（上表最后一行）：不是实现缺陷，而是流式入口无法做长度自适应这一事实没写进契约。补法有两种——在 design.md §7.9 加「前提：显式传入相同的 `block_size`」，或让 `sign_source` 也接受「期望总长」参数。本文按前者记录。
+
+外部校验器的最新一轮（硬断言 775/775、阻塞 0，2026-11-09 22:37:47）是上一批对齐状态的独立佐证；本轮新增接口尚未被该校验器覆盖。

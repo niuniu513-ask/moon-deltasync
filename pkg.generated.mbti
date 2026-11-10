@@ -2,7 +2,7 @@
 package "niuniu513-ask/moon-deltasync"
 
 // Values
-pub fn apply_chain(BytesView, Array[BytesView]) -> ChainResult raise FormatError
+pub fn apply_chain(BytesView, Array[BytesView]) -> ChainResult raise ChainError
 
 pub fn apply_delta(BytesView, Delta) -> ApplyResult raise FormatError
 
@@ -78,7 +78,7 @@ pub fn sign_bytes(BytesView, block_size? : Int32, strong_len? : Int32) -> FileSi
 
 pub fn sign_memory(BytesView, block_size? : Int32, strong_len? : Int32) -> FileSignature raise FormatError
 
-pub fn sign_source(&ByteSource, block_size? : Int32, strong_len? : Int32) -> FileSignature raise FormatError
+pub fn sign_source(&ByteSource, block_size? : Int32, strong_len? : Int32, total_length? : Int32) -> FileSignature raise FormatError
 
 pub fn signature_matches(FileSignature, BytesView) -> Bool
 
@@ -93,6 +93,11 @@ pub fn xxh64(BytesView) -> UInt64
 pub fn xxh64_hex(BytesView) -> String
 
 // Errors
+pub suberror ChainError {
+  StepFailed(Int32, FormatError)
+}
+pub fn ChainError::message(Self) -> String
+
 pub suberror FormatError {
   BadMagic(String)
   UnsupportedVersion(Int32)

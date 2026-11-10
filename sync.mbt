@@ -203,21 +203,39 @@ pub struct ChainResult {
 }
 
 ///|
+/// What went wrong in a chain: the zero based index of the delta that failed, and
+/// the reason it failed.
+pub suberror ChainError {
+  StepFailed(Int32, FormatError)
+}
+
+///|
+pub fn ChainError::message(self : ChainError) -> String {
+  match self {
+    StepFailed(step, error) =>
+      "delta #" + step.to_string() + " failed: " + error.message()
+  }
+}
+
+///|
 /// Apply a chain of deltas one after another, verifying every step.
 ///
 /// A chain is how an update that spans several releases is handled without
 /// shipping a full copy: each delta is built against the previous version, and
-/// the result of one step is the input of the next. Verification is per step, so
-/// a broken link is reported with the index of the delta that failed.
+/// the result of one step is the input of the next. Verification is per step, and
+/// a failure names both the step and the underlying reason, so a caller can tell
+/// "the third download was truncated" from "the base version was wrong".
 pub fn apply_chain(
   old : BytesView,
   deltas : Array[BytesView],
-) -> ChainResult raise FormatError {
+) -> ChainResult raise ChainError {
   let mut current = Bytes::from_array(old.to_array()[:])
   let mut blocks = 0
   let mut steps = 0
   for delta_bytes in deltas {
-    let result = verified_update(current[:], delta_bytes)
+    let result = verified_update(current[:], delta_bytes) catch {
+      error => raise StepFailed(steps, error)
+    }
     current = result.output
     blocks = blocks + result.blocks_verified
     steps = steps + 1

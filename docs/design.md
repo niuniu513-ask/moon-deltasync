@@ -195,8 +195,9 @@ for byte in stream:
 6. **去重正确**：manifest 重建出的字节与输入相同，`root` 由块指纹确定性导出。
 7. **跨后端一致**：相同输入在 wasm / wasm-gc / js / native 上产生逐字节相同的签名、delta 与 manifest。
 8. **无 panic**：截断、错 magic、错长度、超大 count 等畸形输入全部返回诊断错误。
-9. **流式等价**：同一份数据，无论切成多大的窗口喂给 `ByteSource`（1 字节、7 字节、64 KiB 都一样），`sign_source` / `chunk_source` 产出的字节与 `sign_bytes` / `chunk_manifest` **完全相同**。
-10. **链式校验**：`apply_chain` 逐步应用并逐步验证；任何一环用错基准版本，都会在 `BlockMismatch` 或 `DigestMismatch` 处停下，不会把错误数据交给下一环。
+'9. **流式等价**：同一份数据，无论切成多大的窗口喂给 `ByteSource`（1 字节、7 字节、64 KiB 都一样），`sign_source` / `chunk_source` 产出的字节与 `sign_bytes` / `chunk_manifest` **完全相同**。
+   - 前提：块大小必须一致。`sign_bytes` 对 `< 4096` 字节的输入默认用 512，而流无法预读总长；因此 `sign_source` 在未显式给 `block_size` 时默认 8192，除非用 `total_length?` 提示总长（给了就按 `default_block_size(total_length)`）。`sign_memory` 总是传这个提示，所以它无条件等于 `sign_bytes`。`chunk_source` 与 `chunk_manifest` 无条件相等（分块参数默认值相同）。'
+10. **链式校验**：`apply_chain` 逐步应用并逐步验证；任何一环用错基准版本，都会停下并抛 `ChainError::StepFailed(step, 原因)` —— 段号是从 0 开始的 delta 下标，原因保留底层 `FormatError`，不会把错误数据交给下一环。
 11. **回收安全**：`release` 之后只有引用计数为 0 的块会被 `collect` 删除；仍被某个 manifest 引用的块，`assemble` 之后仍能重建出原字节。
 
 ## 8. 命令行
