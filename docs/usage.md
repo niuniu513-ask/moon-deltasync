@@ -61,6 +61,9 @@ pub struct MemorySource { data : Bytes, mut offset : Int32, window : Int32 }
 // 跨版本更新与回收
 pub struct ChainResult { steps : Int32, bytes_written : Int32, blocks_verified : Int32, digest_hex : String, output : Bytes }
 pub struct GcReport { removed_chunks : Int32, reclaimed_bytes : Int32, remaining_chunks : Int32, remaining_bytes : Int32 }
+
+// 只由 apply_chain 抛出的错误：段号 + 底层原因
+pub suberror ChainError { StepFailed(Int32, FormatError) }
 ```
 
 三个容易踩的类型细节：
@@ -182,12 +185,12 @@ let signature = @ds.sign_source(file_source as &ByteSource, block_size=8192)
 - **`window` 是每次 `next` 最多交付多少字节**，默认 64 KiB；`window ≤ 0` 会被当作 64 KiB。窗口大小**不影响产物**——这是不变量 9：1 / 7 / 1024 / 64 KiB 得到同一份 `DSIG` / `DCHK`。
 - **`sign_memory` / `chunk_memory`** 是给「数据已在内存、但想走同一条流式代码路径」的便捷包装，省掉建 trait 对象。
 
-> **等价性有一个前提，必须记住。** `sign_source` / `sign_memory` 的默认 `block_size` 是 **8192**——流式读到最后才知道总长，做不了长度自适应。而 `sign_bytes` 在 `length < 4096` 时默认 **512**。所以：
-> - 数据 ≥ 4096 字节且都不传 `block_size`：两者默认值都是 8192，逐字节相同。
-> - 数据 < 4096 字节（含空输入）且都不传 `block_size`：`sign_bytes` 用 512、`sign_source` 用 8192，**产物不同**（`DSIG` 头部就写着 `block_size`）。
-> - 要无条件等价，就显式传同一个 `block_size`——仓库里的流式等价测试都是这么写的。
+> **块大小要一致，但默认值这件事已经解决了。** `sign_bytes` 对 `< 4096` 字节的输入默认用 512（长度自适应），而流式读到最后才知道总长，所以 `sign_source` 自己猜不了。三种写法都能对齐：
+> - `sign_source(src, block_size=8192)`：显式指定，两边都按同样块长切。
+> - `sign_source(src, total_length=n)`：给出总长提示，`sign_source` 就用 `default_block_size(n)`，与 `sign_bytes` 的自适应默认**完全一致**。
+> - `sign_source(src)` 且既无 `block_size` 也无 `total_length`：默认 **8192**。这时只有当数据 ≥ 4096 字节才与 `sign_bytes` 默认值相同；小于 4096 字节（含空输入）会得到不同的 `block_size` 字段（`DSIG` 头部就写着它，所以产物不同）。
 >
-> `chunk_source` 与 `chunk_manifest` 没有这个问题：两者的默认 `ChunkParams` 一致。
+> **`sign_memory` 总是把 `data.length()` 当提示传进去**，因此它**无条件等于 `sign_bytes`**——空输入、100 字节、10 MiB 都一样，不需要任何额外参数。`chunk_source` / `chunk_memory` 与 `chunk_manifest` 也无条件相等（默认 `ChunkParams` 相同）。
 
 ## 8. delta 链：跨版本更新
 
@@ -195,18 +198,27 @@ let signature = @ds.sign_source(file_source as &ByteSource, block_size=8192)
 
 ```moonbit
 let result = @ds.apply_chain(v1[:], [d12[:], d23[:], d34[:]])
-result.steps            // 应用成功的段数
+result.steps            // 应用成功的段数（成功返回时 == deltas.length()）
 result.bytes_written    // 最终字节数
 result.blocks_verified  // 累计校验通过的块数
 result.digest_hex       // 最终结果的 SHA-256
 result.output           // 最终字节
 ```
 
-语义是**逐步应用、逐步验证**（不变量 10）：每一环都调用一次 `verified_update`（解码 + 逐 op 强校验 + 整体摘要校验），通过之后才作为下一环的 `old`。任何一环的基准版本对不上，就在那一环抛 `BlockMismatch` / `DigestMismatch` 停下，**不会**把错误的中间结果喂给下一环，也不会返回部分成功——所以只要拿到 `ChainResult`，就意味着**全部** `steps` 段都成功了（`steps == deltas.length()`）。
+语义是**逐步应用、逐步验证**（不变量 10）：每一环都调用一次 `verified_update`（解码 + 逐 op 强校验 + 整体摘要校验），通过之后才作为下一环的 `old`。任何一环的基准版本对不上，就在那一环停下，**不会**把错误的中间结果喂给下一环，也不会返回部分成功——所以只要拿到 `ChainResult`，就意味着**全部**段都成功了。
+
+失败时抛的是 `ChainError`，**段号和底层原因都在**：
+
+```moonbit
+pub suberror ChainError { StepFailed(Int32, FormatError) }
+
+// 用错基准版本时：
+// error.message() == "delta #0 failed: block 1 does not match the signature"
+```
 
 两个使用上的注意点：
 
-- **错误里带的是块号，不是段号**：`BlockMismatch(index)` 的 `index` 是**块序号**，错误对象里没有「第几段 delta 失败」这个信息。要定位断在哪一段，自己在外层循环里逐段调用 `verified_update` 并记录段号。
+- **`StepFailed(step, 原因)` 的 `step` 是从 0 开始的 delta 下标**：上例里 `delta #0` 就是 `deltas[0]` 失败，`原因` 是原封不动的 `FormatError`（`BlockMismatch` / `DigestMismatch` / `BadMagic`…），可以继续按构造子分支处理。需要人读文本时用 `ChainError::message()`，它把两段拼成一句话。
 - **中间结果全在内存**：`apply_chain` 每段都产生完整的新字节，一次调用的峰值是「当前版本 + 下一版本」。跨很多大版本时，宁可逐段调用并自己落盘。
 
 ## 9. 块回收
@@ -262,6 +274,8 @@ let outcome = try {
 }
 ```
 
+`apply_chain` 抛的是另一个错误类型 `ChainError`，它只有 `StepFailed(step, 原因)` 一个构造子：`step` 是失败的 delta 下标（从 0 起），`原因` 是上面那个 `FormatError` 原样保留。`ChainError::message()` 拼成 `delta #0 failed: block 1 does not match the signature` 这种形式。想按错误种类分支时，先 match `StepFailed(step, cause)` 再 match `cause`。
+
 命令行把这些错误映射成 `code`：
 
 | 情况 | `code` | 退出码 |
@@ -269,6 +283,8 @@ let outcome = try {
 | 未知命令、未知参数、参数个数不符、摘要不是合法十六进制 / 不是 32 字节 | `usage` | 1 |
 | 输入文件读不到、输出文件写不了 | `read_failed` / `write_failed` | 1 |
 | 库抛出的任何 `FormatError` | `format_error` | 1 |
+
+`chain` 目前只有库接口、没有子命令，所以 `ChainError` 不会出现在 CLI 输出里。
 
 ## 11. 命令行
 
@@ -359,13 +375,14 @@ moon run cmd/main --target js -- verify new.txt <64-hex>
 | §8.1 apply 示例 | `ops_applied` | **已对齐** |
 | §3 模块表（本轮） | 新增 `stream.mbt` 一行，职责写「流式入口 `ByteSource`」 | **已对齐**，文件与 trait 都存在 |
 | §4 类型（本轮） | 新类型是否有对应实现 | `ByteSource` / `MemorySource` / `ChainResult` / `GcReport` 均在 `pkg.generated.mbti` 中 |
-| §7 不变量 9（流式等价） | 窗口 1 / 7 / 1024 / 64 KiB 产物一致 | **已对齐**（`stream_wbtest.mbt` 6 项测试，全部对比整缓冲结果） |
-| §7 不变量 10（链式校验） | 错基准在中间停下 | **已对齐**（`sync_wbtest.mbt`「a chain of deltas applies step by step」「a broken link in the chain is reported」） |
+| §7 不变量 9（流式等价） | 窗口 1 / 7 / 1024 / 64 KiB 产物一致 | **已对齐**（`stream_wbtest.mbt` 10 项测试，全部对比整缓冲结果） |
+| §7 不变量 10（链式校验） | 错基准在中间停下并给出段号 | **已对齐**：`ChainError::StepFailed(step, 原因)` 已落地；`sync_wbtest.mbt` 有「a chain of deltas applies step by step」「a broken link in the chain is reported」 |
 | §7 不变量 11（回收安全） | 只删零引用块、保留块仍可重建 | **已对齐**（`chunk_wbtest.mbt`「reference counting keeps shared chunks and drops the rest」「a retained snapshot survives a collect」） |
-| §7.9 等价性的前提 | 原文说「无论窗口多大都与 `sign_bytes` 完全相同」，未提前提 | **需补一句**：`sign_source` 默认 `block_size` 固定 8192（流式无法预知总长），`sign_bytes` 在 `length < 4096` 时默认 512；两者默认值不同，< 4096 字节的输入（含空输入）不显式传 `block_size` 时产物不同。测试与本文都按「显式传 `block_size`」处理 |
+| §7.9 等价性的前提 | 原文只写「窗口多大都与 `sign_bytes` 相同」，缺块大小的前提 | **已对齐**：design.md §7.9 现在写明了前提；代码侧补了 `sign_source(..., total_length?)`（按 `default_block_size` 走同一套自适应默认），`sign_memory` 总是传 `data.length()` 提示，因此无条件等于 `sign_bytes`。另有 4 项新测试固定这一行为 |
+| §4 错误类型（本轮） | `ChainError` 是否进了契约 | **已对齐**：design.md §7.10 与代码都有 `StepFailed(Int32, FormatError)` + `message()` |
 
-**结构性不一致：0 条。** 上一轮遗留的两处（§4 类型声明块、§8.1 末尾 `--out` 注）已在 `4b0f12d` 修掉并复核；本轮新增的流式、delta 链、块回收三类接口在 §3 / §4 / §7 都有对应描述与测试。
+**未对齐：0 条。** 上表 20 行全部「已对齐」。上一轮的两处（§4 类型声明块、§8.1 末尾 `--out` 注）早在 `4b0f12d` 修掉；本轮唯一待补的 §7.9 前提，design.md 已写入、代码已补 `total_length?` 并用 4 项新测试固定，因此也关掉了。
 
-**唯一待补的是 §7.9 的一句措辞前提**（上表最后一行）：不是实现缺陷，而是流式入口无法做长度自适应这一事实没写进契约。补法有两种——在 design.md §7.9 加「前提：显式传入相同的 `block_size`」，或让 `sign_source` 也接受「期望总长」参数。本文按前者记录。
+一点非阻塞的排版瑕疵：design.md §7.9 那两行首尾各有一个多余的直引号 `'`（像编辑残留），不影响语义，可以顺手清掉。
 
-外部校验器的最新一轮（硬断言 775/775、阻塞 0，2026-11-09 22:37:47）是上一批对齐状态的独立佐证；本轮新增接口尚未被该校验器覆盖。
+外部校验器在 0.2.0 代码上重跑（`scripts/verify-report.txt`，2026-11-10 12:29:39，硬断言 775/775、阻塞 0、退出码 0）——注意它只覆盖 CLI 与三种格式，本轮新增的流式/链/回收属于 API 层，由 `moon test` 的 52 项覆盖。
