@@ -1,4 +1,4 @@
-﻿# moon-deltasync
+# moon-deltasync
 
 MoonBit 增量传输内核。在两个版本的数据之间只传差异，并在接收端**可验证地**重建出与源逐字节相同的结果。
 
@@ -67,10 +67,10 @@ moon run   examples/streaming_sign   --target js
 
 JS 后端需要 Node.js；`wasm`、`wasm-gc` 由 `moonrun` 直接执行；native 后端需要 MSVC（`cl.exe`/`clang-cl`），本机未安装，见下文「验证状态」。四个后端必须产生**逐字节相同**的签名、delta 与 manifest（不变量 7）；本机已在 js / wasm / wasm-gc 上跑通，native 由 CI 覆盖。
 
-已发布到 Mooncakes：`niuniu513-ask/moon-deltasync@0.2.0`（MIT）。在另一个包里引用：
+已发布到 Mooncakes：`niuniu513-ask/moon-deltasync@0.2.1`（MIT）。在另一个包里引用：
 
 ```sh
-moon add niuniu513-ask/moon-deltasync@0.2.0
+moon add niuniu513-ask/moon-deltasync@0.2.1
 ```
 
 ```moonbit
@@ -310,7 +310,7 @@ CI（`.github/workflows/ci.yml`）在 ubuntu-latest 上跑 `check`/`build`/`test
 
 - **GitHub**：`niuniu513-ask/moon-deltasync` 是 **PUBLIC** 仓库，默认分支 `main`，本机 `main` 与 `origin/main` 指向同一提交（仓库仍在活跃提交，SHA 会变）。
 - **CI**：`gh run list` 显示 `main` 上最近若干次运行均为 `success`，最近一次是「docs: make the type declarations and the --out note match the code」，耗时 36s。
-- **Mooncakes**：`niuniu513-ask/moon-deltasync@0.2.0` 已发布（MIT，PUBLIC，未 yank）。注册表回读的 checksum 是 `d9cf1f84…0316`，与本地发布产物 `_build/publish/niuniu513-ask-moon-deltasync-0.2.0.zip` 的 SHA-256 **逐位相同**；`moon.mod` 也是 0.2.0。历史版本 0.1.0 / 0.1.1 / 0.1.2 仍在。
+- **Mooncakes**：`niuniu513-ask/moon-deltasync@0.2.1` 已发布（MIT，PUBLIC，未 yank）。注册表回读的 checksum 与本地发布产物 `_build/publish/niuniu513-ask-moon-deltasync-0.2.1.zip` 的 SHA-256 **逐位相同**，可随时用 registry API 复核；`moon.mod` 也是 0.2.1。历史版本 0.1.0 / 0.1.1 / 0.1.2 / 0.2.0 仍在。
 
 仍然只是「未被本文核实」、而不是「已知有问题」的部分：
 
