@@ -2,6 +2,8 @@
 package "niuniu513-ask/moon-deltasync"
 
 // Values
+pub fn apply_chain(BytesView, Array[BytesView]) -> ChainResult raise FormatError
+
 pub fn apply_delta(BytesView, Delta) -> ApplyResult raise FormatError
 
 pub fn be_u32(UInt32) -> Bytes
@@ -13,6 +15,10 @@ pub fn block_count(Int32, Int32) -> Int32
 pub fn chunk_boundaries(BytesView, params? : ChunkParams) -> Array[(Int32, Int32)]
 
 pub fn chunk_manifest(BytesView, params? : ChunkParams) -> ChunkManifest
+
+pub fn chunk_memory(BytesView, params? : ChunkParams) -> ChunkManifest
+
+pub fn chunk_source(&ByteSource, params? : ChunkParams) -> ChunkManifest
 
 pub fn compute_delta(BytesView, FileSignature) -> Delta raise FormatError
 
@@ -70,6 +76,10 @@ pub fn sha256_prefix(BytesView, Int32) -> Bytes
 
 pub fn sign_bytes(BytesView, block_size? : Int32, strong_len? : Int32) -> FileSignature raise FormatError
 
+pub fn sign_memory(BytesView, block_size? : Int32, strong_len? : Int32) -> FileSignature raise FormatError
+
+pub fn sign_source(&ByteSource, block_size? : Int32, strong_len? : Int32) -> FileSignature raise FormatError
+
 pub fn signature_matches(FileSignature, BytesView) -> Bool
 
 pub fn sub_view(BytesView, Int32, Int32) -> BytesView?
@@ -115,12 +125,21 @@ pub struct ByteSink {
 }
 pub fn ByteSink::length(Self) -> Int32
 pub fn ByteSink::new() -> Self
+pub fn ByteSink::reset(Self) -> Unit
 pub fn ByteSink::to_bytes(Self) -> Bytes
 pub fn ByteSink::write_bytes(Self, BytesView) -> Unit
 pub fn ByteSink::write_u32(Self, UInt32) -> Unit
 pub fn ByteSink::write_u64(Self, UInt64) -> Unit
 pub fn ByteSink::write_u8(Self, Int32) -> Unit
 pub fn ByteSink::write_varint(Self, UInt64) -> Unit
+
+pub struct ChainResult {
+  steps : Int32
+  bytes_written : Int32
+  blocks_verified : Int32
+  digest_hex : String
+  output : Bytes
+}
 
 pub struct ChunkManifest {
   params : ChunkParams
@@ -154,8 +173,12 @@ pub struct ChunkStore {
   mut unique_bytes : Int32
 }
 pub fn ChunkStore::assemble(Self, ChunkManifest) -> Bytes raise FormatError
+pub fn ChunkStore::collect(Self) -> GcReport
 pub fn ChunkStore::ingest(Self, BytesView, params? : ChunkParams) -> IngestReport
 pub fn ChunkStore::new() -> Self
+pub fn ChunkStore::references(Self, String) -> Int32
+pub fn ChunkStore::release(Self, ChunkManifest) -> Int32
+pub fn ChunkStore::retain(Self, ChunkManifest) -> Unit
 pub fn ChunkStore::saved_bytes(Self) -> Int32
 pub fn ChunkStore::stored_bytes(Self) -> Int32
 pub fn ChunkStore::total_bytes_ingested(Self) -> Int32
@@ -193,6 +216,13 @@ pub fn FileSignature::block_length(Self, Int32) -> Int32?
 pub fn FileSignature::digest_hex(Self) -> String
 pub fn FileSignature::encode(Self) -> Bytes
 
+pub struct GcReport {
+  removed_chunks : Int32
+  reclaimed_bytes : Int32
+  remaining_chunks : Int32
+  remaining_bytes : Int32
+}
+
 pub struct IngestReport {
   total_bytes : Int32
   chunk_count : Int32
@@ -201,6 +231,13 @@ pub struct IngestReport {
   unique_bytes : Int32
   manifest : ChunkManifest
 }
+
+pub struct MemorySource {
+  data : Bytes
+  mut offset : Int32
+  window : Int32
+}
+pub fn MemorySource::new(BytesView, window? : Int32) -> Self
 
 pub struct SnapshotReport {
   total_bytes : Int32
@@ -243,3 +280,6 @@ pub fn WeakRoll::value(Self) -> UInt32
 // Type aliases
 
 // Traits
+pub(open) trait ByteSource {
+  fn next(Self) -> Bytes?
+}

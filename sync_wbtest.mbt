@@ -59,3 +59,37 @@ test "ingest_snapshot reports what the store kept" {
   assert_eq(report.saved_bytes, 0)
   assert_eq(report.root_hex.length(), 64)
 }
+
+///|
+test "a chain of deltas applies step by step" {
+  let v1 = pattern(40000, 71)
+  let v2 = pattern(40500, 72)
+  let v3 = pattern(40300, 73)
+  let d12 = plan_transfer(v1[:], v2[:], block_size=1024).delta_bytes()
+  let d23 = plan_transfer(v2[:], v3[:], block_size=1024).delta_bytes()
+  let chain = apply_chain(v1[:], [d12[:], d23[:]])
+  assert_eq(chain.steps, 2)
+  assert_eq(chain.bytes_written, v3.length())
+  assert_eq(chain.digest_hex, sha256_hex(v3[:]))
+}
+
+///|
+test "a broken link in the chain is reported" {
+  // Each version differs from the previous one by a single byte, so both deltas
+  // contain copies and therefore depend on the right base version.
+  let v1 = pattern(20000, 74)
+  let v2 = bytearray_copy_edit(v1, 100)
+  let v3 = bytearray_copy_edit(v2, 15000)
+  let d12 = plan_transfer(v1[:], v2[:], block_size=1024).delta_bytes()
+  let d23 = plan_transfer(v2[:], v3[:], block_size=1024).delta_bytes()
+  assert_eq(apply_chain(v1[:], [d12[:], d23[:]]).digest_hex, sha256_hex(v3[:]))
+  // Using the second delta where the first belongs is a broken link: it was built
+  // against v2 and claims v3, so the result cannot verify.
+  let failed = try {
+    apply_chain(v1[:], [d23[:]]) |> ignore
+    false
+  } catch {
+    _ => true
+  }
+  assert_eq(failed, true)
+}

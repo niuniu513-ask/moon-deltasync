@@ -31,8 +31,9 @@
 | `hash.mbt` | SHA-256（全流与分块）、XXH64（快速指纹）、Adler-32 风格弱校验与滑动更新 `WeakRoll`、常量时间比较 |
 | `signature.mbt` | 块签名构建、序列化/反序列化、格式错误类型 |
 | `delta.mbt` | delta 生成、序列化/反序列化、应用与逐块校验 |
-| `chunk.mbt` | 内容定义分块（gear hash）、manifest、去重块存储 |
-| `sync.mbt` | 三个工作流的高层封装与统计 |
+| `chunk.mbt` | 内容定义分块（gear hash）、manifest、去重块存储、引用计数与回收 |
+| `sync.mbt` | 三个工作流的高层封装与统计、delta 链 |
+| `stream.mbt` | 流式入口 `ByteSource`：按块/按块读入签名与分块，不需要整块数据在内存里 |
 | `report.mbt` | 文本 / JSON / Markdown 三态报告 |
 | `cmd/main` | 命令行入口（js / native 后端） |
 
@@ -194,6 +195,9 @@ for byte in stream:
 6. **去重正确**：manifest 重建出的字节与输入相同，`root` 由块指纹确定性导出。
 7. **跨后端一致**：相同输入在 wasm / wasm-gc / js / native 上产生逐字节相同的签名、delta 与 manifest。
 8. **无 panic**：截断、错 magic、错长度、超大 count 等畸形输入全部返回诊断错误。
+9. **流式等价**：同一份数据，无论切成多大的窗口喂给 `ByteSource`（1 字节、7 字节、64 KiB 都一样），`sign_source` / `chunk_source` 产出的字节与 `sign_bytes` / `chunk_manifest` **完全相同**。
+10. **链式校验**：`apply_chain` 逐步应用并逐步验证；任何一环用错基准版本，都会在 `BlockMismatch` 或 `DigestMismatch` 处停下，不会把错误数据交给下一环。
+11. **回收安全**：`release` 之后只有引用计数为 0 的块会被 `collect` 删除；仍被某个 manifest 引用的块，`assemble` 之后仍能重建出原字节。
 
 ## 8. 命令行
 

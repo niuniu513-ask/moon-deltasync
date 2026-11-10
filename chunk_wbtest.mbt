@@ -137,3 +137,46 @@ test "assembling with a missing chunk fails" {
   }
   assert_eq(failed, true)
 }
+
+///|
+test "reference counting keeps shared chunks and drops the rest" {
+  let store = ChunkStore::new()
+  let a = pattern(131072, 81)
+  let b = pattern(131072, 82)
+  let report_a = ingest_snapshot(store, a[:])
+  let report_b = ingest_snapshot(store, b[:])
+  assert_eq(report_a.chunk_count > 0, true)
+  assert_eq(report_b.chunk_count > 0, true)
+  let manifest_of_a = chunk_manifest(a[:])
+  let manifest_of_b = chunk_manifest(b[:])
+  let first_chunk_a = hex_encode(manifest_of_a.chunks[0].digest[:])
+  assert_eq(store.references(first_chunk_a) >= 1, true)
+  // Releasing version b leaves every chunk of a referenced, so nothing that a
+  // still needs may be collected.
+  store.release(manifest_of_b) |> ignore
+  let report = store.collect()
+  assert_eq(report.removed_chunks >= 0, true)
+  assert_eq(store.references(first_chunk_a) >= 1, true)
+  assert_eq(store.assemble(manifest_of_a).length() > 0, true)
+  // Releasing every version and collecting leaves an empty store.
+  store.release(manifest_of_a) |> ignore
+  let last = store.collect()
+  assert_eq(last.remaining_chunks, 0)
+  assert_eq(last.remaining_bytes, 0)
+  assert_eq(last.reclaimed_bytes > 0, true)
+}
+
+///|
+test "a retained snapshot survives a collect" {
+  let store = ChunkStore::new()
+  let data = pattern(65536, 83)
+  ingest_snapshot(store, data[:]) |> ignore
+  let manifest = chunk_manifest(data[:])
+  store.retain(manifest)
+  let before = store.unique_chunks()
+  let report = store.collect()
+  assert_eq(report.removed_chunks, 0)
+  assert_eq(store.unique_chunks(), before)
+  let rebuilt = store.assemble(manifest)
+  assert_eq(sha256_hex(rebuilt[:]), sha256_hex(data[:]))
+}

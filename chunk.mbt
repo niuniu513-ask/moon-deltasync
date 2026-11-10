@@ -440,3 +440,85 @@ pub fn ChunkStore::assemble(
   let output = sink.to_bytes()
   output
 }
+
+///|
+/// What collecting unreferenced chunks reclaimed.
+pub struct GcReport {
+  removed_chunks : Int32
+  reclaimed_bytes : Int32
+  remaining_chunks : Int32
+  remaining_bytes : Int32
+}
+
+///|
+/// How many versions reference a chunk. A chunk nobody references can be
+/// collected; this is what makes the store usable for retention, not just for
+/// deduplication.
+pub fn ChunkStore::references(self : ChunkStore, digest_hex : String) -> Int32 {
+  self.references.get_or_default(digest_hex, 0)
+}
+
+///|
+/// Add one reference for every chunk in `manifest`.
+pub fn ChunkStore::retain(self : ChunkStore, manifest : ChunkManifest) -> Unit {
+  for chunk in manifest.chunks {
+    let key = hex_encode(chunk.digest[:])
+    if self.chunks.get(key) is Some(_) {
+      self.references[key] = self.references.get_or_default(key, 0) + 1
+    }
+  }
+}
+
+///|
+/// Remove one reference for every chunk in `manifest`.
+///
+/// Returns the number of chunks whose reference count reached zero. Those chunks
+/// stay in the store until `collect` runs, so a release can still be rolled back.
+pub fn ChunkStore::release(
+  self : ChunkStore,
+  manifest : ChunkManifest,
+) -> Int32 {
+  let mut emptied = 0
+  for chunk in manifest.chunks {
+    let key = hex_encode(chunk.digest[:])
+    if self.chunks.get(key) is Some(_) {
+      let current = self.references.get_or_default(key, 0)
+      let next = if current > 0 { current - 1 } else { 0 }
+      self.references[key] = next
+      if next == 0 {
+        emptied = emptied + 1
+      }
+    }
+  }
+  emptied
+}
+
+///|
+/// Drop every chunk whose reference count is zero, and report what that freed.
+pub fn ChunkStore::collect(self : ChunkStore) -> GcReport {
+  let dead : Array[String] = []
+  let mut emptied = 0
+  for key in self.references.keys() {
+    if self.references.get_or_default(key, 0) <= 0 &&
+      self.chunks.get(key) is Some(_) {
+      dead.push(key)
+      emptied = emptied + 1
+    }
+  }
+  let mut reclaimed = 0
+  for key in dead {
+    match self.chunks.get(key) {
+      Some(payload) => reclaimed = reclaimed + payload.length()
+      None => ()
+    }
+    self.chunks.remove(key)
+    self.references.remove(key)
+  }
+  self.unique_bytes = self.unique_bytes - reclaimed
+  {
+    removed_chunks: emptied,
+    reclaimed_bytes: reclaimed,
+    remaining_chunks: self.chunks.length(),
+    remaining_bytes: self.unique_bytes,
+  }
+}

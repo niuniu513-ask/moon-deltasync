@@ -78,6 +78,12 @@ pub fn ByteSink::write_varint(self : ByteSink, value : UInt64) -> Unit {
 }
 
 ///|
+/// Drop everything written so far, keeping the sink for the next block.
+pub fn ByteSink::reset(self : ByteSink) -> Unit {
+  self.bytes.clear()
+}
+
+///|
 /// Freeze the sink into immutable bytes.
 pub fn ByteSink::to_bytes(self : ByteSink) -> Bytes {
   Bytes::from_array(self.bytes[:])

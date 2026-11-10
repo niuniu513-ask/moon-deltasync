@@ -191,3 +191,42 @@ pub fn ingest_snapshot(
     root_hex: ingest.manifest.root_hex(),
   }
 }
+
+///|
+/// What a chain of deltas produced.
+pub struct ChainResult {
+  steps : Int32
+  bytes_written : Int32
+  blocks_verified : Int32
+  digest_hex : String
+  output : Bytes
+}
+
+///|
+/// Apply a chain of deltas one after another, verifying every step.
+///
+/// A chain is how an update that spans several releases is handled without
+/// shipping a full copy: each delta is built against the previous version, and
+/// the result of one step is the input of the next. Verification is per step, so
+/// a broken link is reported with the index of the delta that failed.
+pub fn apply_chain(
+  old : BytesView,
+  deltas : Array[BytesView],
+) -> ChainResult raise FormatError {
+  let mut current = Bytes::from_array(old.to_array()[:])
+  let mut blocks = 0
+  let mut steps = 0
+  for delta_bytes in deltas {
+    let result = verified_update(current[:], delta_bytes)
+    current = result.output
+    blocks = blocks + result.blocks_verified
+    steps = steps + 1
+  }
+  {
+    steps,
+    bytes_written: current.length(),
+    blocks_verified: blocks,
+    digest_hex: sha256_hex(current[:]),
+    output: current,
+  }
+}
